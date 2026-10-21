@@ -127,7 +127,7 @@ The following are proposed choices, not completed implementation claims:
 
 | Decision | Choice and rationale |
 | --- | --- |
-| Language | Go, matching the team's stack and providing standard HTTP and testing libraries. |
+| Language | Go provides static typing, standard HTTP/JSON and testing libraries, and straightforward deployment as a compiled executable. |
 | HTTP | Standard-library routing and JSON; no web framework needed for this scope. |
 | Storage | SQLite with explicit SQL, avoiding a separate database service. |
 | Relationship | One maintainer per application, enforced by a non-null foreign key. |
