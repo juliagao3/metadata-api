@@ -153,5 +153,8 @@ a forced process restart. This demonstrates process-restart persistence, not
 power-loss recovery or hardware durability. The separate executable is not
 included in the parent test's coverage report.
 
-GitHub Actions is not implemented yet. No load-test or high-availability
-guarantees are claimed.
+The [GitHub Actions workflow](../.github/workflows/ci.yml) is prepared for Linux
+formatting, static analysis, build, race-enabled tests, and coverage/log artifacts.
+Its first hosted run is pending. Race detection covers code executed in the test
+processes, not the separate ordinary executable built by the E2E suite.
+No load-test or high-availability guarantees are claimed.

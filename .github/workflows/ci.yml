@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Go checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: "1"
+      GOTOOLCHAIN: local
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download and verify dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Check formatting
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            printf 'Run go fmt ./... to format these files:\n%s\n' "$files"
+            exit 1
+          fi
+
+      - name: Run static analysis
+        run: go vet ./...
+
+      - name: Build server
+        run: |
+          mkdir -p bin
+          go build -o bin/metadata-api ./cmd/server
+
+      - name: Run all tests with race detection and coverage
+        run: |
+          mkdir -p reports
+          go test -race -count=1 -timeout 5m -covermode=atomic -coverprofile=reports/coverage.out ./... 2>&1 | tee reports/tests.log
+
+      - name: Generate coverage reports
+        run: |
+          go tool cover -func reports/coverage.out | tee reports/coverage-summary.txt
+          go tool cover -html reports/coverage.out -o reports/coverage.html
+          {
+            echo '## Coverage'
+            echo '```text'
+            cat reports/coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 7

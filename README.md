@@ -3,8 +3,8 @@
 A RESTful HTTP API for managing Applications and the Maintainers who created them.
 
 **Status:** Server foundation, resource schema, full CRUD for Maintainers and
-Applications, and the E2E suite are implemented. GitHub Actions is not implemented
-yet.
+Applications, and the E2E suite are implemented. The CI workflow is prepared;
+its first GitHub-hosted run is pending.
 
 ## Quick start
 
@@ -119,7 +119,9 @@ automatically and includes server logs on failure.
 Run only E2E tests with `go test -v ./tests/e2e`; Go must be on `PATH`.
 The subprocess is not included in the parent test's coverage report.
 Race detection (`go test -race ./...`) requires a supported C toolchain.
-GitHub Actions is not implemented yet.
+The [CI workflow](.github/workflows/ci.yml) runs formatting, vet, build, and all
+tests with race detection on Linux for main pushes and pull requests, or manually.
+It uploads coverage reports and test logs. Its first hosted run is still pending.
 
 ## Cost and time spent
 
