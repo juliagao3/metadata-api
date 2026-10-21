@@ -7,6 +7,180 @@ import (
 	"testing"
 )
 
+func TestDeleteMaintainerPersistsAfterReopen(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := NewStore(db)
+	first, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateMaintainer(t.Context(), "Sam", "sam@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteMaintainer(t.Context(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteMaintainer(t.Context(), first.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("repeated deletion error = %v, want not found", err)
+	}
+	if err := store.DeleteMaintainer(t.Context(), second.ID+1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing deletion error = %v, want not found", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	store = NewStore(reopened)
+	if _, err := store.GetMaintainer(t.Context(), first.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted resource returned after restart: %v", err)
+	}
+	all, err := store.ListMaintainers(t.Context())
+	if err != nil || len(all) != 1 || all[0] != second {
+		t.Fatalf("unrelated record changed: %+v, error = %v", all, err)
+	}
+}
+
+func TestDeleteMaintainerInUse(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	store := NewStore(db)
+	owner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, title := range []string{"First", "Second"} {
+		if _, err := db.ExecContext(t.Context(), "INSERT INTO applications (title, version, maintainer_id) VALUES (?, ?, ?)", title, "1.0", owner.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.DeleteMaintainer(t.Context(), owner.ID); !errors.Is(err, ErrMaintainerInUse) {
+		t.Fatalf("error = %v, want maintainer in use", err)
+	}
+	saved, err := store.GetMaintainer(t.Context(), owner.ID)
+	if err != nil || saved != owner {
+		t.Fatalf("owner changed after rejected deletion: %+v, error = %v", saved, err)
+	}
+	var count int
+	if err := db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM applications WHERE maintainer_id = ?", owner.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("applications changed after rejected deletion: count = %d", count)
+	}
+	if _, err := db.ExecContext(t.Context(), "DELETE FROM applications WHERE maintainer_id = ?", owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteMaintainer(t.Context(), owner.ID); err != nil {
+		t.Fatalf("delete after removing applications: %v", err)
+	}
+}
+
+func TestDeleteMaintainerHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	store := NewStore(openSchemaTestDB(t))
+	original, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := store.DeleteMaintainer(ctx, original.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want cancellation", err)
+	}
+	saved, err := store.GetMaintainer(t.Context(), original.ID)
+	if err != nil || saved != original {
+		t.Fatalf("canceled deletion changed the record: %+v, error = %v", saved, err)
+	}
+}
+
+func TestDeleteMaintainerReportsClosedDatabase(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err := NewStore(db).DeleteMaintainer(t.Context(), 1)
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrMaintainerInUse) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("error = %v, want an unexpected storage failure", err)
+	}
+}
+
+func TestDeleteMaintainerReportsUnrelatedConstraint(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	store := NewStore(db)
+	original, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `
+		CREATE TRIGGER block_deletion BEFORE DELETE ON maintainers
+		BEGIN SELECT RAISE(ABORT, 'unrelated constraint'); END
+	`); err != nil {
+		t.Fatal(err)
+	}
+	err = store.DeleteMaintainer(t.Context(), original.ID)
+	if err == nil || errors.Is(err, ErrMaintainerInUse) || errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, want an unexpected storage failure", err)
+	}
+	saved, err := store.GetMaintainer(t.Context(), original.ID)
+	if err != nil || saved != original {
+		t.Fatalf("failed deletion changed the record: %+v, error = %v", saved, err)
+	}
+}
+
+func TestDeleteMaintainerReportsBusyDatabase(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	writerDB, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writerDB.Close()
+	original, err := NewStore(writerDB).CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := writerDB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(t.Context(), "UPDATE maintainers SET name = ? WHERE id = ?", "Holding lock", original.ID); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(db)
+	if err := store.DeleteMaintainer(t.Context(), original.ID); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("error = %v, want unavailable", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.GetMaintainer(t.Context(), original.ID)
+	if err != nil || saved != original {
+		t.Fatalf("failed deletion changed the record: %+v, error = %v", saved, err)
+	}
+	if err := store.DeleteMaintainer(t.Context(), original.ID); err != nil {
+		t.Fatalf("delete must work after releasing the lock: %v", err)
+	}
+}
+
 func TestCreateMaintainerPersistsAfterReopen(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "metadata.db")

@@ -13,6 +13,74 @@ import (
 	"github.com/juliagao3/metadata-api/internal/storage"
 )
 
+func TestDeleteMaintainer(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name       string
+		path       string
+		storageErr error
+		wantStatus int
+		wantCode   string
+		wantDelete bool
+	}{
+		{name: "deleted", wantStatus: 204, wantDelete: true},
+		{name: "leading zeros", path: "/api/v1/maintainers/007", wantStatus: 204, wantDelete: true},
+		{name: "missing", storageErr: fmt.Errorf("delete: %w", storage.ErrNotFound), wantStatus: 404, wantCode: "not_found", wantDelete: true},
+		{name: "in use", storageErr: fmt.Errorf("delete: %w", storage.ErrMaintainerInUse), wantStatus: 409, wantCode: "maintainer_in_use", wantDelete: true},
+		{name: "busy", storageErr: fmt.Errorf("delete: %w", storage.ErrUnavailable), wantStatus: 503, wantCode: "database_unavailable", wantDelete: true},
+		{name: "failure", storageErr: errors.New("private database details"), wantStatus: 500, wantCode: "internal_error", wantDelete: true},
+		{name: "zero ID", path: "/api/v1/maintainers/0", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "negative ID", path: "/api/v1/maintainers/-7", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "nonnumeric ID", path: "/api/v1/maintainers/seven", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "overflow", path: "/api/v1/maintainers/9223372036854775808", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "query", path: "/api/v1/maintainers/7?extra=true", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "empty query", path: "/api/v1/maintainers/7?", wantStatus: 400, wantCode: "invalid_request"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			type contextKey struct{}
+			ctx := context.WithValue(t.Context(), contextKey{}, "request")
+			deleteCalled := false
+			db := stubDatabase{remove: func(ctx context.Context, id int64) error {
+				deleteCalled = true
+				if id != 7 || ctx.Value(contextKey{}) != "request" {
+					t.Errorf("unexpected ID or missing request context: %d", id)
+				}
+				return tt.storageErr
+			}}
+			path := tt.path
+			if path == "" {
+				path = "/api/v1/maintainers/7"
+			}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodDelete, path, nil).WithContext(ctx)
+			NewRouter(db).ServeHTTP(response, request)
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", response.Code, tt.wantStatus, response.Body.String())
+			}
+			if deleteCalled != tt.wantDelete {
+				t.Errorf("delete called = %t, want %t", deleteCalled, tt.wantDelete)
+			}
+			if tt.wantStatus == http.StatusNoContent {
+				if response.Body.Len() != 0 || response.Header().Get("Content-Type") != "" {
+					t.Fatal("204 must have no body or JSON content type")
+				}
+				return
+			}
+			var body errorResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Error.Code != tt.wantCode || body.Error.Message == "" {
+				t.Errorf("unexpected error: %+v", body)
+			}
+			if response.Header().Get("Content-Type") != "application/json" ||
+				strings.Contains(response.Body.String(), "private database details") {
+				t.Error("error must be JSON without private database details")
+			}
+		})
+	}
+}
+
 func TestCreateMaintainer(t *testing.T) {
 	t.Parallel()
 	validBody := `{"name":"Alex","email":"alex@example.com"}`

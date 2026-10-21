@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrNotFound    = errors.New("resource not found")
-	ErrUnavailable = errors.New("database unavailable")
+	ErrNotFound        = errors.New("resource not found")
+	ErrUnavailable     = errors.New("database unavailable")
+	ErrMaintainerInUse = errors.New("maintainer has applications")
 )
 
 type Store struct {

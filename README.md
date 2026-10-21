@@ -2,8 +2,8 @@
 
 A RESTful HTTP API for managing Applications and the Maintainers who created them.
 
-**Status:** Server foundation, resource schema, and Maintainer create/read/list/update
-are implemented. Maintainer delete, Application CRUD, the E2E suite, and
+**Status:** Server foundation, resource schema, and full Maintainer CRUD
+are implemented. Application CRUD, the E2E suite, and
 GitHub Actions are not implemented yet.
 
 ## Quick start
@@ -59,6 +59,17 @@ Invoke-RestMethod -Uri http://127.0.0.1:8080/api/v1/maintainers/1 -Method Put -C
 PUT requires both fields and returns `200 OK` with the saved record and unchanged
 ID. It does not create missing resources (`404`) or accept client-supplied IDs.
 
+Delete a maintainer that has no applications:
+
+```powershell
+Invoke-WebRequest -Uri http://127.0.0.1:8080/api/v1/maintainers/1 -Method Delete
+```
+
+Successful deletion returns `204 No Content` with no body. Missing maintainers,
+including repeated deletions, return `404`. A maintainer that still owns
+applications returns `409` with code `maintainer_in_use`; neither the maintainer
+nor their applications are deleted.
+
 Optional configuration:
 
 ```powershell
@@ -95,7 +106,8 @@ semantics, and error codes. The API uses JSON and the `/api/v1` prefix.
 
 The specification can be viewed in any OpenAPI 3.0-compatible viewer.
 `GET /readyz`, `POST /api/v1/maintainers`, `GET /api/v1/maintainers`,
-`GET /api/v1/maintainers/{id}`, and `PUT /api/v1/maintainers/{id}` are implemented.
+`GET /api/v1/maintainers/{id}`, `PUT /api/v1/maintainers/{id}`, and
+`DELETE /api/v1/maintainers/{id}` are implemented.
 GET routes also support HEAD.
 Unsupported methods on these paths return `405` with an `Allow` header.
 Application paths currently return `404`; their contracts describe intended
@@ -124,6 +136,8 @@ The foundation includes:
 - **Parameterized writes:** Maintainer values are passed separately from SQL.
   SQLite assigns IDs on creation and preserves them on update; lock contention
   is reported as `503`, while unexpected storage failures return `500`.
+- **Protected deletion:** SQLite rejects deletion of maintainers who still own
+  applications; the API returns `409` without cascading to their applications.
 
 Equivalent validation and storage operations for the remaining endpoints will
 be added with those endpoints. These safeguards alone do not make the service
@@ -136,7 +150,7 @@ time and requirements justify them.
 ## Key design decisions
 
 Go, standard HTTP routing, SQLite connection setup, the resource schema, and
-Maintainer create/read/list/update are implemented. Remaining resource endpoints
+full Maintainer CRUD are implemented. Remaining resource endpoints
 are subsequent tasks.
 
 | Decision | Choice and rationale |
@@ -168,9 +182,10 @@ Current connection settings are one open/idle connection, `foreign_keys=ON`,
 `synchronous=FULL`, and a 1,000 ms busy timeout. These settings are reapplied when
 the pool opens a replacement connection. New databases use SQLite's default
 rollback journal. Readiness has a two-second deadline; database startup has a
-five-second deadline, including schema initialization. Maintainer creation and
-update each use one atomic statement (`INSERT/UPDATE ... RETURNING`) with SQLite's
-implicit transaction; neither requires a separate multi-statement transaction.
+five-second deadline, including schema initialization. Maintainer creation,
+update, and deletion each use one atomic statement
+(`INSERT/UPDATE/DELETE ... RETURNING`) with SQLite's implicit transaction; no
+separate existence check or multi-statement transaction is needed.
 
 ### Database schema
 
@@ -209,6 +224,9 @@ Current tests cover:
   parsing, missing resources, HEAD responses, and read-failure handling.
 - Maintainer replacement, required PUT fields, stable IDs, repeated identical
   updates, no upsert, cancellation, and preservation of unrelated records.
+- Maintainer deletion, repeated/missing deletions, deletion persistence, empty
+  success bodies, cancellation, lock contention, and in-use conflicts that
+  preserve the maintainer and their applications.
 
 Remaining test work includes:
 
@@ -230,8 +248,8 @@ the server itself does not.
 - **Actual time spent:** To be recorded as work proceeds, distinguishing design,
   implementation, testing, and documentation.
 - **Current work:** Requirements discussion, README scaffolding, API contract,
-  server foundation, resource schema, and Maintainer create/read/list/update with tests.
-  Remaining CRUD operations have not been implemented.
+  server foundation, resource schema, and full Maintainer CRUD with tests.
+  Application CRUD has not been implemented.
 
 ## Additional notes
 

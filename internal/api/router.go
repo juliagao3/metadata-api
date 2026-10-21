@@ -14,6 +14,7 @@ type database interface {
 	CreateMaintainer(context.Context, string, string) (storage.Maintainer, error)
 	GetMaintainer(context.Context, int64) (storage.Maintainer, error)
 	UpdateMaintainer(context.Context, int64, string, string) (storage.Maintainer, error)
+	DeleteMaintainer(context.Context, int64) error
 	ListMaintainers(context.Context) ([]storage.Maintainer, error)
 }
 
@@ -54,8 +55,10 @@ func NewRouter(db database) http.Handler {
 			getMaintainer(w, r, db)
 		case http.MethodPut:
 			updateMaintainer(w, r, db)
+		case http.MethodDelete:
+			deleteMaintainer(w, r, db)
 		default:
-			w.Header().Set("Allow", "GET, HEAD, PUT")
+			w.Header().Set("Allow", "GET, HEAD, PUT, DELETE")
 			writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method is not supported for this path.")
 		}
 	})

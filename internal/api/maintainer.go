@@ -72,6 +72,18 @@ func updateMaintainer(w http.ResponseWriter, r *http.Request, db database) {
 	writeJSON(w, r, http.StatusOK, maintainer)
 }
 
+func deleteMaintainer(w http.ResponseWriter, r *http.Request, db database) {
+	id, ok := resourceID(w, r)
+	if !ok {
+		return
+	}
+	if err := db.DeleteMaintainer(r.Context(), id); err != nil {
+		writeStorageError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func decodeMaintainerInput(w http.ResponseWriter, r *http.Request) (maintainerInput, bool) {
 	var input maintainerInput
 	if !decodeJSON(w, r, &input, "name", "email") {
@@ -110,6 +122,10 @@ func validateMaintainer(input maintainerInput) map[string]string {
 }
 
 func writeStorageError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, storage.ErrMaintainerInUse) {
+		writeError(w, r, http.StatusConflict, "maintainer_in_use", "Delete this maintainer's applications first.")
+		return
+	}
 	if errors.Is(err, storage.ErrNotFound) {
 		writeError(w, r, http.StatusNotFound, "not_found", "Requested resource does not exist.")
 		return
