@@ -1,0 +1,10 @@
+/bin/
+/metadata-api
+*.exe
+*.test
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+/coverage.out
+/coverage.html
