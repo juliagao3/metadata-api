@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   description: |
     API contract for implementation and review. Readiness and Maintainer
-    creation/read/list are implemented; other resource endpoints are not
+    create/read/list/update are implemented; other resource endpoints are not
     implemented yet.
 
     Manage Applications and the Maintainers who created them. Each application

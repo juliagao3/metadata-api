@@ -33,6 +33,18 @@ func (s *Store) GetMaintainer(ctx context.Context, id int64) (Maintainer, error)
 	return maintainer, nil
 }
 
+func (s *Store) UpdateMaintainer(ctx context.Context, id int64, name, email string) (Maintainer, error) {
+	var maintainer Maintainer
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE maintainers SET name = ?, email = ? WHERE id = ?
+		RETURNING id, name, email
+	`, name, email, id).Scan(&maintainer.ID, &maintainer.Name, &maintainer.Email)
+	if err != nil {
+		return Maintainer{}, fmt.Errorf("update maintainer: %w", databaseError(err))
+	}
+	return maintainer, nil
+}
+
 func (s *Store) ListMaintainers(ctx context.Context) ([]Maintainer, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT id, name, email FROM maintainers ORDER BY id")
 	if err != nil {

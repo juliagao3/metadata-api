@@ -19,16 +19,8 @@ type maintainerInput struct {
 }
 
 func createMaintainer(w http.ResponseWriter, r *http.Request, db database) {
-	var input maintainerInput
-	if !decodeJSON(w, r, &input, "name", "email") {
-		return
-	}
-	if fields := validateMaintainer(input); len(fields) != 0 {
-		writeJSON(w, r, http.StatusUnprocessableEntity, errorResponse{Error: errorDetail{
-			Code:    "validation_failed",
-			Message: "Request validation failed.",
-			Fields:  fields,
-		}})
+	input, ok := decodeMaintainerInput(w, r)
+	if !ok {
 		return
 	}
 
@@ -61,6 +53,39 @@ func listMaintainers(w http.ResponseWriter, r *http.Request, db database) {
 		return
 	}
 	writeJSON(w, r, http.StatusOK, maintainers)
+}
+
+func updateMaintainer(w http.ResponseWriter, r *http.Request, db database) {
+	id, ok := resourceID(w, r)
+	if !ok {
+		return
+	}
+	input, ok := decodeMaintainerInput(w, r)
+	if !ok {
+		return
+	}
+	maintainer, err := db.UpdateMaintainer(r.Context(), id, input.Name, input.Email)
+	if err != nil {
+		writeStorageError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, maintainer)
+}
+
+func decodeMaintainerInput(w http.ResponseWriter, r *http.Request) (maintainerInput, bool) {
+	var input maintainerInput
+	if !decodeJSON(w, r, &input, "name", "email") {
+		return input, false
+	}
+	if fields := validateMaintainer(input); len(fields) != 0 {
+		writeJSON(w, r, http.StatusUnprocessableEntity, errorResponse{Error: errorDetail{
+			Code:    "validation_failed",
+			Message: "Request validation failed.",
+			Fields:  fields,
+		}})
+		return input, false
+	}
+	return input, true
 }
 
 func validateMaintainer(input maintainerInput) map[string]string {

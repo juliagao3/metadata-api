@@ -13,6 +13,7 @@ type database interface {
 	PingContext(context.Context) error
 	CreateMaintainer(context.Context, string, string) (storage.Maintainer, error)
 	GetMaintainer(context.Context, int64) (storage.Maintainer, error)
+	UpdateMaintainer(context.Context, int64, string, string) (storage.Maintainer, error)
 	ListMaintainers(context.Context) ([]storage.Maintainer, error)
 }
 
@@ -48,12 +49,15 @@ func NewRouter(db database) http.Handler {
 		}
 	})
 	mux.HandleFunc("/api/v1/maintainers/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			getMaintainer(w, r, db)
+		case http.MethodPut:
+			updateMaintainer(w, r, db)
+		default:
+			w.Header().Set("Allow", "GET, HEAD, PUT")
 			writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method is not supported for this path.")
-			return
 		}
-		getMaintainer(w, r, db)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "Requested resource does not exist.")

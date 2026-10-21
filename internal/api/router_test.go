@@ -17,6 +17,7 @@ type stubDatabase struct {
 	ping   func(context.Context) error
 	create func(context.Context, string, string) (storage.Maintainer, error)
 	get    func(context.Context, int64) (storage.Maintainer, error)
+	update func(context.Context, int64, string, string) (storage.Maintainer, error)
 	list   func(context.Context) ([]storage.Maintainer, error)
 }
 
@@ -30,6 +31,10 @@ func (s stubDatabase) CreateMaintainer(ctx context.Context, name, email string) 
 
 func (s stubDatabase) GetMaintainer(ctx context.Context, id int64) (storage.Maintainer, error) {
 	return s.get(ctx, id)
+}
+
+func (s stubDatabase) UpdateMaintainer(ctx context.Context, id int64, name, email string) (storage.Maintainer, error) {
+	return s.update(ctx, id, name, email)
 }
 
 func (s stubDatabase) ListMaintainers(ctx context.Context) ([]storage.Maintainer, error) {

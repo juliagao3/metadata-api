@@ -192,11 +192,11 @@ func TestListMaintainers(t *testing.T) {
 
 func TestMaintainerItemRouteMethods(t *testing.T) {
 	t.Parallel()
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
+	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
 		t.Run(method, func(t *testing.T) {
 			response := httptest.NewRecorder()
 			NewRouter(stubDatabase{}).ServeHTTP(response, httptest.NewRequest(method, "/api/v1/maintainers/1", nil))
-			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD" {
+			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD, PUT" {
 				t.Fatalf("status = %d, Allow = %q", response.Code, response.Header().Get("Allow"))
 			}
 		})

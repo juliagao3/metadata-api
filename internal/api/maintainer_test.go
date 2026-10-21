@@ -193,3 +193,103 @@ func TestCreateMaintainerPropagatesContext(t *testing.T) {
 		t.Fatalf("status = %d, want 201", response.Code)
 	}
 }
+
+func TestUpdateMaintainer(t *testing.T) {
+	t.Parallel()
+	validBody := `{"name":"Alex Updated","email":"updated@example.com"}`
+	for _, tt := range []struct {
+		name        string
+		body        string
+		path        string
+		contentType string
+		storageErr  error
+		wantStatus  int
+		wantCode    string
+		wantField   string
+		wantUpdate  bool
+	}{
+		{name: "updated", body: validBody, contentType: "application/json", wantStatus: 200, wantUpdate: true},
+		{name: "preserve values", body: `{"name":" Alex Updated ","email":"Updated@Example.com"}`, contentType: "application/json", wantStatus: 200, wantUpdate: true},
+		{name: "missing name", body: `{"email":"updated@example.com"}`, contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantField: "name"},
+		{name: "missing email", body: `{"name":"Alex Updated"}`, contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantField: "email"},
+		{name: "blank name", body: `{"name":" ","email":"updated@example.com"}`, contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantField: "name"},
+		{name: "invalid email", body: `{"name":"Alex","email":"invalid"}`, contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantField: "email"},
+		{name: "long name", body: fmt.Sprintf(`{"name":%q,"email":"updated@example.com"}`, strings.Repeat("a", 201)), contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantField: "name"},
+		{name: "client supplied ID", body: `{"id":7,"name":"Alex","email":"updated@example.com"}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "null", body: `{"name":null,"email":"updated@example.com"}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "wrong type", body: `{"name":7,"email":"updated@example.com"}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "broken JSON", body: `{"name":`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "missing content type", body: validBody, wantStatus: 415, wantCode: "unsupported_media_type"},
+		{name: "oversized", body: `{"name":"` + strings.Repeat("a", maxRequestBytes) + `"}`, contentType: "application/json", wantStatus: 413, wantCode: "request_too_large"},
+		{name: "invalid ID", path: "/api/v1/maintainers/0", body: validBody, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "query parameter", path: "/api/v1/maintainers/7?extra=true", body: validBody, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "missing resource", body: validBody, contentType: "application/json", storageErr: fmt.Errorf("update: %w", storage.ErrNotFound), wantStatus: 404, wantCode: "not_found", wantUpdate: true},
+		{name: "busy", body: validBody, contentType: "application/json", storageErr: storage.ErrUnavailable, wantStatus: 503, wantCode: "database_unavailable", wantUpdate: true},
+		{name: "storage failure", body: validBody, contentType: "application/json", storageErr: errors.New("private database details"), wantStatus: 500, wantCode: "internal_error", wantUpdate: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			type contextKey struct{}
+			ctx := context.WithValue(t.Context(), contextKey{}, "request")
+			updateCalled := false
+			db := stubDatabase{update: func(ctx context.Context, id int64, name, email string) (storage.Maintainer, error) {
+				updateCalled = true
+				if id != 7 {
+					t.Errorf("update ID = %d, want 7", id)
+				}
+				if ctx.Value(contextKey{}) != "request" {
+					t.Error("storage must receive the request context")
+				}
+				return storage.Maintainer{ID: id, Name: name, Email: email}, tt.storageErr
+			}}
+			path := tt.path
+			if path == "" {
+				path = "/api/v1/maintainers/7"
+			}
+			request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(tt.body)).WithContext(ctx)
+			if tt.contentType != "" {
+				request.Header.Set("Content-Type", tt.contentType)
+			}
+			response := httptest.NewRecorder()
+			NewRouter(db).ServeHTTP(response, request)
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", response.Code, tt.wantStatus, response.Body.String())
+			}
+			if updateCalled != tt.wantUpdate {
+				t.Errorf("update called = %t, want %t", updateCalled, tt.wantUpdate)
+			}
+			if response.Header().Get("Content-Type") != "application/json" {
+				t.Error("response must use application/json")
+			}
+			if response.Header().Get("Location") != "" {
+				t.Error("PUT must update the existing resource, not return a creation Location")
+			}
+			if tt.wantCode != "" {
+				var body errorResponse
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Error.Code != tt.wantCode || body.Error.Message == "" {
+					t.Errorf("unexpected error: %+v", body)
+				}
+				if tt.wantField != "" && body.Error.Fields[tt.wantField] == "" {
+					t.Errorf("missing field error for %s", tt.wantField)
+				}
+				if strings.Contains(response.Body.String(), "private database details") {
+					t.Error("response exposes internal database details")
+				}
+				return
+			}
+			var got storage.Maintainer
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			var input maintainerInput
+			if err := json.Unmarshal([]byte(tt.body), &input); err != nil {
+				t.Fatal(err)
+			}
+			if got.ID != 7 || got.Name != input.Name || got.Email != input.Email {
+				t.Errorf("unexpected updated resource: %+v", got)
+			}
+		})
+	}
+}

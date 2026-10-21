@@ -2,8 +2,8 @@
 
 A RESTful HTTP API for managing Applications and the Maintainers who created them.
 
-**Status:** Server foundation, resource schema, and Maintainer creation/read/list
-are implemented. Maintainer update/delete, Application CRUD, the E2E suite, and
+**Status:** Server foundation, resource schema, and Maintainer create/read/list/update
+are implemented. Maintainer delete, Application CRUD, the E2E suite, and
 GitHub Actions are not implemented yet.
 
 ## Quick start
@@ -49,6 +49,16 @@ Invoke-RestMethod -Uri http://127.0.0.1:8080/api/v1/maintainers
 Both return `200 OK`. A missing maintainer returns `404`. Lists are ordered by
 ascending ID, return `[]` when empty, and are not paginated in this version.
 
+Replace a maintainer's name and email using its existing ID:
+
+```powershell
+$body = @{ name = "Alex Updated"; email = "updated@example.com" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8080/api/v1/maintainers/1 -Method Put -ContentType application/json -Body $body
+```
+
+PUT requires both fields and returns `200 OK` with the saved record and unchanged
+ID. It does not create missing resources (`404`) or accept client-supplied IDs.
+
 Optional configuration:
 
 ```powershell
@@ -84,8 +94,9 @@ schemas, validation, example requests and responses, update and deletion
 semantics, and error codes. The API uses JSON and the `/api/v1` prefix.
 
 The specification can be viewed in any OpenAPI 3.0-compatible viewer.
-`GET /readyz`, `POST /api/v1/maintainers`, `GET /api/v1/maintainers`, and
-`GET /api/v1/maintainers/{id}` are implemented. GET routes also support HEAD.
+`GET /readyz`, `POST /api/v1/maintainers`, `GET /api/v1/maintainers`,
+`GET /api/v1/maintainers/{id}`, and `PUT /api/v1/maintainers/{id}` are implemented.
+GET routes also support HEAD.
 Unsupported methods on these paths return `405` with an `Allow` header.
 Application paths currently return `404`; their contracts describe intended
 behavior.
@@ -107,12 +118,12 @@ The foundation includes:
   initialized together before HTTP startup, without clearing existing data.
 - **Relational integrity:** Non-null foreign keys prevent orphaned applications,
   and restricted deletion protects a maintainer's existing applications.
-- **Bounded, validated Maintainer requests:** Creation accepts one JSON object up
-  to 64 KiB, rejects unknown fields/nulls/incorrect types, and validates required
-  fields, name/email lengths, and email syntax.
-- **Parameterized insertion:** Maintainer values are passed separately from SQL.
-  SQLite assigns the ID and returns the saved row; lock contention is reported
-  as `503`, while unexpected storage failures return `500`.
+- **Bounded, validated Maintainer requests:** Creation/update accept one JSON
+  object up to 64 KiB, reject unknown fields/nulls/incorrect types, and validate
+  required fields, name/email lengths, and email syntax.
+- **Parameterized writes:** Maintainer values are passed separately from SQL.
+  SQLite assigns IDs on creation and preserves them on update; lock contention
+  is reported as `503`, while unexpected storage failures return `500`.
 
 Equivalent validation and storage operations for the remaining endpoints will
 be added with those endpoints. These safeguards alone do not make the service
@@ -125,8 +136,8 @@ time and requirements justify them.
 ## Key design decisions
 
 Go, standard HTTP routing, SQLite connection setup, the resource schema, and
-Maintainer creation/read/list are implemented. Remaining resource endpoints are
-subsequent tasks.
+Maintainer create/read/list/update are implemented. Remaining resource endpoints
+are subsequent tasks.
 
 | Decision | Choice and rationale |
 | --- | --- |
@@ -157,9 +168,9 @@ Current connection settings are one open/idle connection, `foreign_keys=ON`,
 `synchronous=FULL`, and a 1,000 ms busy timeout. These settings are reapplied when
 the pool opens a replacement connection. New databases use SQLite's default
 rollback journal. Readiness has a two-second deadline; database startup has a
-five-second deadline, including schema initialization. Maintainer creation uses
-a single atomic `INSERT ... RETURNING` statement with SQLite's implicit
-transaction; it does not require a separate multi-statement transaction.
+five-second deadline, including schema initialization. Maintainer creation and
+update each use one atomic statement (`INSERT/UPDATE ... RETURNING`) with SQLite's
+implicit transaction; neither requires a separate multi-statement transaction.
 
 ### Database schema
 
@@ -176,7 +187,7 @@ and has an index for relationship lookups.
 Startup applies `CREATE TABLE/INDEX IF NOT EXISTS` within a transaction. Reopening
 a database preserves existing records. This initializes a fresh schema; it does
 not migrate or fully validate an arbitrary existing schema. Future structural
-changes will require explicit migrations. Maintainer creation validates email
+changes will require explicit migrations. Maintainer creation/update validate email
 syntax, nonblank names, and field-length limits in the HTTP layer. Application
 field validation will be added with its endpoints.
 
@@ -196,6 +207,8 @@ Current tests cover:
   cancellation, and recovery after database lock contention.
 - Maintainer retrieval/listing, ascending ID order, empty arrays, strict path-ID
   parsing, missing resources, HEAD responses, and read-failure handling.
+- Maintainer replacement, required PUT fields, stable IDs, repeated identical
+  updates, no upsert, cancellation, and preservation of unrelated records.
 
 Remaining test work includes:
 
@@ -217,7 +230,7 @@ the server itself does not.
 - **Actual time spent:** To be recorded as work proceeds, distinguishing design,
   implementation, testing, and documentation.
 - **Current work:** Requirements discussion, README scaffolding, API contract,
-  server foundation, resource schema, and Maintainer creation/read/list with tests.
+  server foundation, resource schema, and Maintainer create/read/list/update with tests.
   Remaining CRUD operations have not been implemented.
 
 ## Additional notes

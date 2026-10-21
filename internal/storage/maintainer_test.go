@@ -128,3 +128,135 @@ func TestCreateMaintainerReportsBusyDatabase(t *testing.T) {
 		t.Fatalf("creation must work after the lock is released: %v", err)
 	}
 }
+
+func TestUpdateMaintainer(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := NewStore(db)
+	first, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateMaintainer(t.Context(), "Sam", "sam@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Maintainer{ID: first.ID, Name: "Alex O'Brien'); DROP TABLE maintainers; --", Email: second.Email}
+	got, err := store.UpdateMaintainer(t.Context(), first.ID, want.Name, want.Email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("updated = %+v, want %+v", got, want)
+	}
+	saved, err := store.GetMaintainer(t.Context(), first.ID)
+	if err != nil || saved != want {
+		t.Fatalf("saved = %+v, error = %v, want %+v", saved, err, want)
+	}
+	unchanged, err := store.GetMaintainer(t.Context(), second.ID)
+	if err != nil || unchanged != second {
+		t.Fatalf("unrelated maintainer changed: %+v, error = %v", unchanged, err)
+	}
+	repeated, err := store.UpdateMaintainer(t.Context(), first.ID, want.Name, want.Email)
+	if err != nil || repeated != want {
+		t.Fatalf("identical PUT must succeed: %+v, error = %v", repeated, err)
+	}
+	missing, err := store.UpdateMaintainer(t.Context(), second.ID+1, "Missing", "missing@example.com")
+	if !errors.Is(err, ErrNotFound) || missing != (Maintainer{}) {
+		t.Fatalf("result = %+v, error = %v, want not found", missing, err)
+	}
+	all, err := store.ListMaintainers(t.Context())
+	if err != nil || len(all) != 2 {
+		t.Fatalf("missing-resource update must not insert: records = %v, error = %v", all, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	persisted, err := NewStore(reopened).GetMaintainer(t.Context(), first.ID)
+	if err != nil || persisted != want {
+		t.Fatalf("after reopen = %+v, error = %v, want %+v", persisted, err, want)
+	}
+}
+
+func TestUpdateMaintainerHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	store := NewStore(openSchemaTestDB(t))
+	original, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	got, err := store.UpdateMaintainer(ctx, original.ID, "Changed", "changed@example.com")
+	if !errors.Is(err, context.Canceled) || got != (Maintainer{}) {
+		t.Fatalf("result = %+v, error = %v, want cancellation", got, err)
+	}
+	saved, err := store.GetMaintainer(t.Context(), original.ID)
+	if err != nil || saved != original {
+		t.Fatalf("canceled update changed the record: %+v, error = %v", saved, err)
+	}
+}
+
+func TestUpdateMaintainerReportsClosedDatabase(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewStore(db).UpdateMaintainer(t.Context(), 1, "Alex", "alex@example.com")
+	if err == nil || errors.Is(err, ErrNotFound) || got != (Maintainer{}) {
+		t.Fatalf("result = %+v, error = %v, want a storage failure", got, err)
+	}
+}
+
+func TestUpdateMaintainerReportsBusyDatabase(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	writerDB, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writerDB.Close()
+	original, err := NewStore(writerDB).CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := writerDB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(t.Context(), "UPDATE maintainers SET name = ? WHERE id = ?", "Holding lock", original.ID); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(db)
+	got, err := store.UpdateMaintainer(t.Context(), original.ID, "Updated", "updated@example.com")
+	if !errors.Is(err, ErrUnavailable) || got != (Maintainer{}) {
+		t.Fatalf("result = %+v, error = %v, want unavailable", got, err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.GetMaintainer(t.Context(), original.ID)
+	if err != nil || saved != original {
+		t.Fatalf("failed update changed the record: %+v, error = %v", saved, err)
+	}
+	if _, err := store.UpdateMaintainer(t.Context(), original.ID, "Updated", "updated@example.com"); err != nil {
+		t.Fatalf("update must work after the lock is released: %v", err)
+	}
+}
