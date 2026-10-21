@@ -3,8 +3,8 @@ info:
   title: Metadata API
   version: 0.1.0
   description: |
-    API contract for implementation and review. Only readiness is implemented;
-    Application and Maintainer endpoints are not implemented yet.
+    API contract for implementation and review. Readiness and Maintainer
+    creation are implemented; other resource endpoints are not implemented yet.
 
     Manage Applications and the Maintainers who created them. Each application
     has one immutable creator; one maintainer can create multiple applications.

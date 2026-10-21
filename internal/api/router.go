@@ -2,26 +2,19 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/juliagao3/metadata-api/internal/storage"
 )
 
-type databasePinger interface {
+type database interface {
 	PingContext(context.Context) error
+	CreateMaintainer(context.Context, string, string) (storage.Maintainer, error)
 }
 
-type errorResponse struct {
-	Error errorDetail `json:"error"`
-}
-
-type errorDetail struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func NewRouter(db databasePinger) http.Handler {
+func NewRouter(db database) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -41,6 +34,14 @@ func NewRouter(db databasePinger) http.Handler {
 			Status string `json:"status"`
 		}{Status: "ready"})
 	})
+	mux.HandleFunc("/api/v1/maintainers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method is not supported for this path.")
+			return
+		}
+		createMaintainer(w, r, db)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "Requested resource does not exist.")
 	})
@@ -52,19 +53,4 @@ func NewRouter(db databasePinger) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
-}
-
-func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
-	writeJSON(w, r, status, errorResponse{Error: errorDetail{Code: code, Message: message}})
-}
-
-func writeJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if r.Method == http.MethodHead {
-		return
-	}
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		log.Printf("write JSON response: %v", err)
-	}
 }

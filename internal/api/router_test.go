@@ -9,12 +9,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juliagao3/metadata-api/internal/storage"
 )
 
-type pingFunc func(context.Context) error
+type stubDatabase struct {
+	ping   func(context.Context) error
+	create func(context.Context, string, string) (storage.Maintainer, error)
+}
 
-func (f pingFunc) PingContext(ctx context.Context) error {
-	return f(ctx)
+func (s stubDatabase) PingContext(ctx context.Context) error {
+	return s.ping(ctx)
+}
+
+func (s stubDatabase) CreateMaintainer(ctx context.Context, name, email string) (storage.Maintainer, error) {
+	return s.create(ctx, name, email)
 }
 
 func TestRouter(t *testing.T) {
@@ -41,14 +50,14 @@ func TestRouter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pingCalled := false
-			db := pingFunc(func(ctx context.Context) error {
+			db := stubDatabase{ping: func(ctx context.Context) error {
 				pingCalled = true
 				deadline, ok := ctx.Deadline()
 				if !ok || time.Until(deadline) > 2*time.Second {
 					t.Error("readiness check must have a bounded deadline")
 				}
 				return tt.pingErr
-			})
+			}}
 			response := httptest.NewRecorder()
 			NewRouter(db).ServeHTTP(response, httptest.NewRequest(tt.method, tt.path, nil))
 
@@ -100,12 +109,12 @@ func TestReadinessPropagatesCancellation(t *testing.T) {
 	cancel()
 	request := httptest.NewRequest(http.MethodGet, "/readyz", nil).WithContext(ctx)
 	response := httptest.NewRecorder()
-	NewRouter(pingFunc(func(ctx context.Context) error {
+	NewRouter(stubDatabase{ping: func(ctx context.Context) error {
 		if !errors.Is(ctx.Err(), context.Canceled) {
 			t.Error("database check did not receive request cancellation")
 		}
 		return ctx.Err()
-	})).ServeHTTP(response, request)
+	}}).ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", response.Code)
 	}

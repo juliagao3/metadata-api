@@ -51,7 +51,7 @@ func run(ctx context.Context, address, databasePath string) (err error) {
 		return fmt.Errorf("listen on %q: %w", address, err)
 	}
 	server := &http.Server{
-		Handler:           api.NewRouter(db),
+		Handler:           api.NewRouter(storage.NewStore(db)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
