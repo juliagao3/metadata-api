@@ -21,6 +21,7 @@ type database interface {
 	CreateApplication(context.Context, storage.Application) (storage.Application, error)
 	GetApplication(context.Context, int64) (storage.Application, error)
 	UpdateApplication(context.Context, int64, storage.Application) (storage.Application, error)
+	DeleteApplication(context.Context, int64) error
 	ListApplications(context.Context) ([]storage.Application, error)
 }
 
@@ -85,8 +86,10 @@ func NewRouter(db database) http.Handler {
 			getApplication(w, r, db)
 		case http.MethodPut:
 			updateApplication(w, r, db)
+		case http.MethodDelete:
+			deleteApplication(w, r, db)
 		default:
-			w.Header().Set("Allow", "GET, HEAD, PUT")
+			w.Header().Set("Allow", "GET, HEAD, PUT, DELETE")
 			writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method is not supported for this path.")
 		}
 	})

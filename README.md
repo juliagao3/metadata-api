@@ -2,9 +2,9 @@
 
 A RESTful HTTP API for managing Applications and the Maintainers who created them.
 
-**Status:** Server foundation, resource schema, full Maintainer CRUD, and
-Application creation/read/list/update are implemented. Application delete,
-the E2E suite, and GitHub Actions are not implemented yet.
+**Status:** Server foundation, resource schema, and full CRUD for Maintainers
+and Applications are implemented. The E2E suite and GitHub Actions are not
+implemented yet.
 
 ## Quick start
 
@@ -102,8 +102,17 @@ optional fields. The ID and creator stay unchanged. Supplying `id` or
 `maintainer_id` is rejected with `400`, even if unchanged. A missing application
 returns `404`; PUT never creates one. Repeating an identical PUT is allowed.
 
-Delete a maintainer that has no applications (the example above would block
-deletion of maintainer `1`):
+Delete an application using its returned ID:
+
+```powershell
+Invoke-WebRequest -Uri http://127.0.0.1:8080/api/v1/applications/1 -Method Delete
+```
+
+This returns `204 No Content` with no body. A missing application, including a
+repeated deletion, returns `404`. The creator and all other applications remain
+unchanged. Deleting an application does not automatically delete its maintainer.
+
+Delete a maintainer after deleting all of their applications:
 
 ```powershell
 Invoke-WebRequest -Uri http://127.0.0.1:8080/api/v1/maintainers/1 -Method Delete
@@ -152,12 +161,10 @@ The specification can be viewed in any OpenAPI 3.0-compatible viewer.
 `GET /readyz`, `POST /api/v1/maintainers`, `GET /api/v1/maintainers`,
 `GET /api/v1/maintainers/{id}`, `PUT /api/v1/maintainers/{id}`,
 `DELETE /api/v1/maintainers/{id}`, `POST /api/v1/applications`,
-`GET /api/v1/applications`, `GET /api/v1/applications/{id}`, and
-`PUT /api/v1/applications/{id}` are implemented.
+`GET /api/v1/applications`, `GET /api/v1/applications/{id}`,
+`PUT /api/v1/applications/{id}`, and `DELETE /api/v1/applications/{id}` are implemented.
 GET routes also support HEAD.
 Unsupported methods on these paths return `405` with an `Allow` header.
-Application deletion is not implemented; DELETE currently returns `405` on
-application item paths.
 
 ## Production features
 
@@ -186,9 +193,7 @@ The foundation includes:
 - **Protected deletion:** SQLite rejects deletion of maintainers who still own
   applications; the API returns `409` without cascading to their applications.
 
-Equivalent validation and storage operations for the remaining endpoints will
-be added with those endpoints. These safeguards alone do not make the service
-production-ready.
+These safeguards alone do not make the service production-ready.
 
 Authentication, authorization, TLS termination, rate limiting, monitoring,
 automated backups, and high availability are outside the initial scope unless
@@ -196,9 +201,8 @@ time and requirements justify them.
 
 ## Key design decisions
 
-Go, standard HTTP routing, SQLite connection setup, the resource schema, full
-Maintainer CRUD, and Application creation/read/list/update are implemented.
-Application deletion is the remaining resource endpoint.
+Go, standard HTTP routing, SQLite connection setup, the resource schema, and full
+CRUD for Maintainers and Applications are implemented.
 
 | Decision | Choice and rationale |
 | --- | --- |
@@ -238,6 +242,8 @@ The foreign key checks the creator as part of that write, without a separate
 existence check that could race with maintainer deletion.
 Application updates use one atomic `UPDATE ... RETURNING` statement, updating
 only editable metadata and leaving the ID and creator unchanged.
+Application deletion uses one atomic `DELETE ... RETURNING` statement; it does
+not delete the creator or any other application.
 
 ### Database schema
 
@@ -291,11 +297,13 @@ Current tests cover:
 - Application replacement, clearing omitted optional metadata, required fields,
   immutable IDs/creators, repeated identical PUTs, duplicate metadata, no upsert,
   persistence, cancellation, and lock contention.
+- Application deletion, missing/repeated deletions, empty success bodies,
+  persistence, cancellation, lock recovery, preserved creators and unrelated
+  applications, and allowing maintainer deletion only after their last application
+  is removed.
 
 Remaining test work includes:
 
-- Unit tests for remaining Application handlers and their error mapping.
-- Storage integration tests for remaining Application operations.
 - End-to-end tests against a compiled, running server over HTTP, including
   persistence across a server restart.
 - GitHub Actions checks for formatting, static analysis, build, tests, and race
@@ -312,8 +320,9 @@ the server itself does not.
 - **Actual time spent:** To be recorded as work proceeds, distinguishing design,
   implementation, testing, and documentation.
 - **Current work:** Requirements discussion, README scaffolding, API contract,
-  server foundation, resource schema, full Maintainer CRUD, and Application
-  creation/read/list/update with tests. Application deletion remains unimplemented.
+  server foundation, resource schema, and full Maintainer/Application CRUD with
+  unit and storage integration tests. The retained E2E suite and GitHub Actions
+  remain unimplemented.
 
 ## Additional notes
 

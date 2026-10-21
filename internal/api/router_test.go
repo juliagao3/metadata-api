@@ -23,6 +23,7 @@ type stubDatabase struct {
 	createApplication func(context.Context, storage.Application) (storage.Application, error)
 	getApplication    func(context.Context, int64) (storage.Application, error)
 	updateApplication func(context.Context, int64, storage.Application) (storage.Application, error)
+	removeApplication func(context.Context, int64) error
 	listApplications  func(context.Context) ([]storage.Application, error)
 }
 
@@ -60,6 +61,10 @@ func (s stubDatabase) GetApplication(ctx context.Context, id int64) (storage.App
 
 func (s stubDatabase) UpdateApplication(ctx context.Context, id int64, input storage.Application) (storage.Application, error) {
 	return s.updateApplication(ctx, id, input)
+}
+
+func (s stubDatabase) DeleteApplication(ctx context.Context, id int64) error {
+	return s.removeApplication(ctx, id)
 }
 
 func (s stubDatabase) ListApplications(ctx context.Context) ([]storage.Application, error) {

@@ -14,6 +14,68 @@ import (
 	"github.com/juliagao3/metadata-api/internal/storage"
 )
 
+func TestDeleteApplication(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name       string
+		path       string
+		storageErr error
+		wantStatus int
+		wantCode   string
+		wantDelete bool
+	}{
+		{name: "deleted", wantStatus: 204, wantDelete: true},
+		{name: "leading zeros", path: "/api/v1/applications/0007", wantStatus: 204, wantDelete: true},
+		{name: "missing", storageErr: fmt.Errorf("delete: %w", storage.ErrNotFound), wantStatus: 404, wantCode: "not_found", wantDelete: true},
+		{name: "busy", storageErr: fmt.Errorf("delete: %w", storage.ErrUnavailable), wantStatus: 503, wantCode: "database_unavailable", wantDelete: true},
+		{name: "failure", storageErr: errors.New("private database details"), wantStatus: 500, wantCode: "internal_error", wantDelete: true},
+		{name: "zero", path: "/api/v1/applications/0", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "negative", path: "/api/v1/applications/-7", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "nonnumeric", path: "/api/v1/applications/seven", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "overflow", path: "/api/v1/applications/9223372036854775808", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "query", path: "/api/v1/applications/7?extra=true", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "empty query", path: "/api/v1/applications/7?", wantStatus: 400, wantCode: "invalid_request"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			type contextKey struct{}
+			ctx := context.WithValue(t.Context(), contextKey{}, "request")
+			deleteCalled := false
+			db := stubDatabase{removeApplication: func(ctx context.Context, id int64) error {
+				deleteCalled = true
+				if id != 7 || ctx.Value(contextKey{}) != "request" {
+					t.Errorf("unexpected ID or missing request context: %d", id)
+				}
+				return tt.storageErr
+			}}
+			path := tt.path
+			if path == "" {
+				path = "/api/v1/applications/7"
+			}
+			request := httptest.NewRequest(http.MethodDelete, path, nil).WithContext(ctx)
+			response := httptest.NewRecorder()
+			NewRouter(db).ServeHTTP(response, request)
+			if response.Code != tt.wantStatus || deleteCalled != tt.wantDelete {
+				t.Fatalf("status = %d, want %d; delete called = %t: %s", response.Code, tt.wantStatus, deleteCalled, response.Body.String())
+			}
+			if tt.wantStatus == http.StatusNoContent {
+				if response.Body.Len() != 0 || response.Header().Get("Content-Type") != "" {
+					t.Fatal("204 must have no body or JSON content type")
+				}
+				return
+			}
+			var body errorResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Error.Code != tt.wantCode || body.Error.Message == "" ||
+				response.Header().Get("Content-Type") != "application/json" ||
+				strings.Contains(response.Body.String(), "private database details") {
+				t.Errorf("unexpected error: %+v", body)
+			}
+		})
+	}
+}
+
 func TestUpdateApplication(t *testing.T) {
 	t.Parallel()
 	validBody := `{"title":"Updated App","version":"2.0"}`
@@ -291,11 +353,11 @@ func TestListApplications(t *testing.T) {
 
 func TestApplicationItemRouteMethods(t *testing.T) {
 	t.Parallel()
-	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
+	for _, method := range []string{http.MethodPost, http.MethodPatch, http.MethodOptions} {
 		t.Run(method, func(t *testing.T) {
 			response := httptest.NewRecorder()
 			NewRouter(stubDatabase{}).ServeHTTP(response, httptest.NewRequest(method, "/api/v1/applications/1", nil))
-			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD, PUT" {
+			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD, PUT, DELETE" {
 				t.Fatalf("status = %d, Allow = %q", response.Code, response.Header().Get("Allow"))
 			}
 		})

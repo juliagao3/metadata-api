@@ -61,6 +61,15 @@ func (s *Store) UpdateApplication(ctx context.Context, id int64, input Applicati
 	return application, nil
 }
 
+func (s *Store) DeleteApplication(ctx context.Context, id int64) error {
+	var deletedID int64
+	err := s.db.QueryRowContext(ctx, "DELETE FROM applications WHERE id = ? RETURNING id", id).Scan(&deletedID)
+	if err != nil {
+		return fmt.Errorf("delete application: %w", databaseError(err))
+	}
+	return nil
+}
+
 func (s *Store) ListApplications(ctx context.Context) ([]Application, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, title, version, company, website, source, license, description, maintainer_id

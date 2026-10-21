@@ -8,6 +8,163 @@ import (
 	"testing"
 )
 
+func TestDeleteApplicationPersistsAfterReopen(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := NewStore(db)
+	owner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherOwner, err := store.CreateMaintainer(t.Context(), "Sam", "sam@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.CreateApplication(t.Context(), Application{Title: "First", Version: "1", MaintainerID: owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateApplication(t.Context(), Application{Title: "Second", Version: "1", MaintainerID: owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateApplication(t.Context(), Application{Title: "Other", Version: "1", MaintainerID: otherOwner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteApplication(t.Context(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteApplication(t.Context(), first.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("repeated deletion error = %v, want not found", err)
+	}
+	if err := store.DeleteApplication(t.Context(), other.ID+1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing deletion error = %v, want not found", err)
+	}
+	all, err := store.ListApplications(t.Context())
+	if err != nil || !reflect.DeepEqual(all, []Application{second, other}) {
+		t.Fatalf("unrelated applications changed: %+v, error = %v", all, err)
+	}
+	if err := store.DeleteMaintainer(t.Context(), owner.ID); !errors.Is(err, ErrMaintainerInUse) {
+		t.Fatalf("creator must remain protected while the second application exists: %v", err)
+	}
+	if err := store.DeleteApplication(t.Context(), second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	store = NewStore(reopened)
+	for _, id := range []int64{first.ID, second.ID} {
+		if _, err := store.GetApplication(t.Context(), id); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("deleted application %d returned after restart: %v", id, err)
+		}
+	}
+	for _, creator := range []Maintainer{owner, otherOwner} {
+		got, err := store.GetMaintainer(t.Context(), creator.ID)
+		if err != nil || got != creator {
+			t.Fatalf("deleting applications must preserve creators: %+v, error = %v", got, err)
+		}
+	}
+	if err := store.DeleteMaintainer(t.Context(), owner.ID); err != nil {
+		t.Fatalf("creator must be deletable after all their applications are removed: %v", err)
+	}
+	all, err = store.ListApplications(t.Context())
+	if err != nil || !reflect.DeepEqual(all, []Application{other}) {
+		t.Fatalf("persisted applications = %+v, error = %v, want only the unrelated application", all, err)
+	}
+}
+
+func TestDeleteApplicationHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	store := NewStore(openSchemaTestDB(t))
+	owner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := store.CreateApplication(t.Context(), Application{Title: "App", Version: "1", MaintainerID: owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := store.DeleteApplication(ctx, original.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want cancellation", err)
+	}
+	saved, err := store.GetApplication(t.Context(), original.ID)
+	if err != nil || saved != original {
+		t.Fatalf("canceled deletion changed the application: %+v, error = %v", saved, err)
+	}
+}
+
+func TestDeleteApplicationReportsClosedDatabase(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err := NewStore(db).DeleteApplication(t.Context(), 1)
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("error = %v, want unexpected storage failure", err)
+	}
+}
+
+func TestDeleteApplicationReportsBusyDatabase(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	writerDB, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writerDB.Close()
+	writer := NewStore(writerDB)
+	owner, err := writer.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := writer.CreateApplication(t.Context(), Application{Title: "App", Version: "1", MaintainerID: owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := writerDB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(t.Context(), "UPDATE applications SET title = ? WHERE id = ?", "Holding lock", original.ID); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(db)
+	if err := store.DeleteApplication(t.Context(), original.ID); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("error = %v, want unavailable", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.GetApplication(t.Context(), original.ID)
+	if err != nil || saved != original {
+		t.Fatalf("failed deletion changed the application: %+v, error = %v", saved, err)
+	}
+	if err := store.DeleteApplication(t.Context(), original.ID); err != nil {
+		t.Fatalf("delete must work after releasing the lock: %v", err)
+	}
+}
+
 func TestUpdateApplicationPersistsAfterReopen(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "metadata.db")

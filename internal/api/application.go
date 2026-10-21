@@ -79,6 +79,18 @@ func updateApplication(w http.ResponseWriter, r *http.Request, db database) {
 	writeJSON(w, r, http.StatusOK, application)
 }
 
+func deleteApplication(w http.ResponseWriter, r *http.Request, db database) {
+	id, ok := resourceID(w, r)
+	if !ok {
+		return
+	}
+	if err := db.DeleteApplication(r.Context(), id); err != nil {
+		writeStorageError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func validateApplication(input storage.Application) map[string]string {
 	fields := make(map[string]string)
 	for _, field := range []struct {
