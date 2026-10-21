@@ -1,0 +1,608 @@
+openapi: 3.0.3
+info:
+  title: Metadata API
+  version: 0.1.0
+  description: |
+    API contract for implementation and review. The server is not implemented yet.
+
+    Manage Applications and the Maintainers who created them. Each application
+    has one immutable creator; one maintainer can create multiple applications.
+    There is no authentication or authorization in this initial scope.
+
+    Requests and responses use JSON. POST and PUT require application/json
+    (a charset parameter is accepted) and exactly one JSON object, at most
+    65,536 bytes. Unknown fields, incorrect value types, null field values,
+    and multiple JSON values return 400.
+
+    Query parameters are not supported; supplied parameters return 400.
+    Lists are unpaginated, ordered by ascending ID, and empty lists are [].
+    Resource paths do not end with a slash.
+
+    Required name, title, and version strings must contain a non-whitespace
+    character. String limits count Unicode code points, not UTF-8 bytes.
+    Strings are stored as supplied; emails must be plain email addresses
+    without display names or surrounding whitespace. Optional application
+    strings default to "" when omitted and are always present in responses.
+    Names, emails, titles, and versions have no uniqueness constraints.
+
+    PUT replaces editable fields and never creates a missing resource.
+    Required editable fields must be supplied. Omitted optional fields become
+    "". Application maintainer_id is accepted only on creation; including it
+    in PUT returns 400, even if unchanged. Clients must not submit an entire
+    GET response as a PUT body. Concurrent updates use last-successful-write-wins.
+
+    IDs are server-generated positive signed 64-bit integers. Request IDs must
+    be JSON integers. Path IDs contain decimal digits only and represent a
+    positive signed 64-bit value; malformed path IDs return 400.
+
+    Errors use one JSON envelope, including routing errors. Error codes and
+    field names are stable; human-readable messages are not. A request with
+    several errors may report the first applicable error. Internal database
+    details must not be exposed.
+servers:
+  - url: http://localhost:8080
+    description: Intended local default; listen address will be configurable.
+security: []
+tags:
+  - name: Maintainers
+  - name: Applications
+  - name: Readiness
+paths:
+  /api/v1/maintainers:
+    post:
+      tags: [Maintainers]
+      operationId: createMaintainer
+      summary: Create a maintainer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaintainerInput'
+            example:
+              name: Alex
+              email: alex@example.com
+      responses:
+        '201':
+          description: Created maintainer.
+          headers:
+            Location:
+              description: Relative URL of the created maintainer.
+              schema:
+                type: string
+                example: /api/v1/maintainers/1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Maintainer'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    get:
+      tags: [Maintainers]
+      operationId: listMaintainers
+      summary: List maintainers in ascending ID order
+      responses:
+        '200':
+          description: All maintainers; an empty collection is [].
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Maintainer'
+              example:
+                - id: 1
+                  name: Alex
+                  email: alex@example.com
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  /api/v1/maintainers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+    get:
+      tags: [Maintainers]
+      operationId: getMaintainer
+      summary: Retrieve a maintainer
+      responses:
+        '200':
+          $ref: '#/components/responses/MaintainerFound'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    put:
+      tags: [Maintainers]
+      operationId: updateMaintainer
+      summary: Replace a maintainer's name and email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaintainerInput'
+            example:
+              name: Alex Updated
+              email: alex.updated@example.com
+      responses:
+        '200':
+          description: Updated maintainer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Maintainer'
+              example:
+                id: 1
+                name: Alex Updated
+                email: alex.updated@example.com
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    delete:
+      tags: [Maintainers]
+      operationId: deleteMaintainer
+      summary: Delete a maintainer with no applications
+      description: |
+        If applications reference this maintainer, return 409 without changing
+        either resource. A missing maintainer, including a repeated deletion,
+        returns 404. No cascade deletion is performed.
+      responses:
+        '204':
+          description: Deleted; no response body.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            Maintainer still has applications. Code: maintainer_in_use.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: maintainer_in_use
+                  message: Delete this maintainer's applications first.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  /api/v1/applications:
+    post:
+      tags: [Applications]
+      operationId: createApplication
+      summary: Create an application for an existing maintainer
+      description: |
+        A nonexistent maintainer_id returns 422 with a maintainer_id field
+        error, not 404, because it is a reference in the request body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationCreate'
+            example:
+              title: Metadata Explorer
+              version: 1.0.0
+              company: Example
+              website: https://example.com
+              source: https://github.com/example/metadata-explorer
+              license: MIT
+              description: A tool for browsing application metadata.
+              maintainer_id: 1
+      responses:
+        '201':
+          description: Created application.
+          headers:
+            Location:
+              description: Relative URL of the created application.
+              schema:
+                type: string
+                example: /api/v1/applications/1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    get:
+      tags: [Applications]
+      operationId: listApplications
+      summary: List applications in ascending ID order
+      responses:
+        '200':
+          description: All applications; an empty collection is [].
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Application'
+              example: []
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  /api/v1/applications/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+    get:
+      tags: [Applications]
+      operationId: getApplication
+      summary: Retrieve an application
+      responses:
+        '200':
+          $ref: '#/components/responses/ApplicationFound'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    put:
+      tags: [Applications]
+      operationId: updateApplication
+      summary: Replace editable application metadata
+      description: |
+        Creator reassignment is not supported. Omitted optional fields become
+        "". The example deliberately clears all optional fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationUpdate'
+            example:
+              title: Metadata Explorer
+              version: 2.0.0
+      responses:
+        '200':
+          description: Updated application; creator remains unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Application'
+              example:
+                id: 1
+                title: Metadata Explorer
+                version: 2.0.0
+                company: ''
+                website: ''
+                source: ''
+                license: ''
+                description: ''
+                maintainer_id: 1
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    delete:
+      tags: [Applications]
+      operationId: deleteApplication
+      summary: Delete an application without deleting its maintainer
+      description: A missing application, including a repeated deletion, returns 404.
+      responses:
+        '204':
+          description: Deleted; no response body.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  /readyz:
+    get:
+      tags: [Readiness]
+      operationId: getReadiness
+      summary: Check database connectivity
+      description: |
+        Supports startup checks and E2E orchestration, not a claim of complete
+        production readiness.
+      responses:
+        '200':
+          description: Database is reachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [ready]
+              example:
+                status: ready
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '503':
+          description: Database is unavailable; code is database_unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+components:
+  parameters:
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      description: Positive signed 64-bit integer written using decimal digits only.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        maximum: 9223372036854775807
+  schemas:
+    MaintainerInput:
+      type: object
+      additionalProperties: false
+      required: [name, email]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: '\S'
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: Plain email address without display name or surrounding whitespace.
+    Maintainer:
+      type: object
+      additionalProperties: false
+      required: [id, name, email]
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775807
+        name:
+          $ref: '#/components/schemas/MaintainerInput/properties/name'
+        email:
+          $ref: '#/components/schemas/MaintainerInput/properties/email'
+      example:
+        id: 1
+        name: Alex
+        email: alex@example.com
+    ApplicationCreate:
+      type: object
+      additionalProperties: false
+      required: [title, version, maintainer_id]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: '\S'
+        version:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
+          description: Metadata string; semantic versioning is not required.
+        company:
+          type: string
+          maxLength: 200
+          default: ''
+        website:
+          type: string
+          maxLength: 2048
+          default: ''
+        source:
+          type: string
+          maxLength: 2048
+          default: ''
+        license:
+          type: string
+          maxLength: 100
+          default: ''
+        description:
+          type: string
+          maxLength: 10000
+          default: ''
+        maintainer_id:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775807
+          description: Existing creator; cannot be changed after creation.
+    ApplicationUpdate:
+      type: object
+      additionalProperties: false
+      required: [title, version]
+      properties:
+        title:
+          $ref: '#/components/schemas/ApplicationCreate/properties/title'
+        version:
+          $ref: '#/components/schemas/ApplicationCreate/properties/version'
+        company:
+          $ref: '#/components/schemas/ApplicationCreate/properties/company'
+        website:
+          $ref: '#/components/schemas/ApplicationCreate/properties/website'
+        source:
+          $ref: '#/components/schemas/ApplicationCreate/properties/source'
+        license:
+          $ref: '#/components/schemas/ApplicationCreate/properties/license'
+        description:
+          $ref: '#/components/schemas/ApplicationCreate/properties/description'
+    Application:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - version
+        - company
+        - website
+        - source
+        - license
+        - description
+        - maintainer_id
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775807
+        title:
+          $ref: '#/components/schemas/ApplicationCreate/properties/title'
+        version:
+          $ref: '#/components/schemas/ApplicationCreate/properties/version'
+        company:
+          $ref: '#/components/schemas/ApplicationCreate/properties/company'
+        website:
+          $ref: '#/components/schemas/ApplicationCreate/properties/website'
+        source:
+          $ref: '#/components/schemas/ApplicationCreate/properties/source'
+        license:
+          $ref: '#/components/schemas/ApplicationCreate/properties/license'
+        description:
+          $ref: '#/components/schemas/ApplicationCreate/properties/description'
+        maintainer_id:
+          $ref: '#/components/schemas/ApplicationCreate/properties/maintainer_id'
+      example:
+        id: 1
+        title: Metadata Explorer
+        version: 1.0.0
+        company: Example
+        website: https://example.com
+        source: https://github.com/example/metadata-explorer
+        license: MIT
+        description: A tool for browsing application metadata.
+        maintainer_id: 1
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - invalid_request
+                - not_found
+                - method_not_allowed
+                - maintainer_in_use
+                - request_too_large
+                - unsupported_media_type
+                - validation_failed
+                - internal_error
+                - database_unavailable
+            message:
+              type: string
+            fields:
+              type: object
+              additionalProperties:
+                type: string
+      example:
+        error:
+          code: validation_failed
+          message: Request validation failed.
+          fields:
+            title: must not be blank
+  responses:
+    MaintainerFound:
+      description: Requested maintainer.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Maintainer'
+    ApplicationFound:
+      description: Requested application; maintainer is referenced by ID, not embedded.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Application'
+    InvalidRequest:
+      description: |
+        Malformed or empty body, invalid JSON shape/type, null field,
+        multiple JSON values, unknown field, invalid path ID, or unsupported
+        query parameter. Code: invalid_request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Requested resource does not exist; code is not_found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RequestTooLarge:
+      description: Write body exceeds 65,536 bytes; code is request_too_large.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnsupportedMediaType:
+      description: |
+        Missing or unsupported POST/PUT Content-Type.
+        Code: unsupported_media_type.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationFailed:
+      description: |
+        Required field missing/blank, exceeded length limit, invalid email, or
+        maintainer_id out of range or nonexistent. Code: validation_failed.
+        The fields map identifies invalid request fields.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnexpectedError:
+      description: |
+        Other errors use this envelope:
+        500 internal_error for unexpected server/storage failures;
+        503 database_unavailable when storage stays busy after a bounded wait.
+        Unknown routes return 404 not_found. Unsupported methods on known
+        paths return 405 method_not_allowed with an Allow header.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
