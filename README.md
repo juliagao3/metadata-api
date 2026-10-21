@@ -2,9 +2,9 @@
 
 A RESTful HTTP API for managing Applications and the Maintainers who created them.
 
-**Status:** Server foundation implemented. The server opens SQLite and exposes
-readiness; Application/Maintainer CRUD, the resource schema, E2E suite, and
-GitHub Actions are not implemented yet.
+**Status:** Server foundation and resource schema implemented. The server
+initializes SQLite tables and exposes readiness; Application/Maintainer CRUD,
+the E2E suite, and GitHub Actions are not implemented yet.
 
 ## Quick start
 
@@ -35,8 +35,8 @@ go run .\cmd\server -addr 127.0.0.1:8081 -db .\metadata.db
 ```
 
 The database's parent directory must already exist. Startup fails explicitly if
-the database cannot be opened or the address cannot be bound. The database file
-is created automatically, but resource tables will be added in a later task.
+the database cannot be opened, schema initialization fails, or the address
+cannot be bound. The database file and resource tables are created automatically.
 
 Build a standalone Windows executable:
 
@@ -79,10 +79,14 @@ The foundation includes:
   HTTP errors use JSON without exposing database details.
 - **Local-only default listener:** Binding to loopback avoids unintentionally
   exposing an unauthenticated development service.
+- **Transactional schema initialization:** Tables and the relationship index are
+  initialized together before HTTP startup, without clearing existing data.
+- **Relational integrity:** Non-null foreign keys prevent orphaned applications,
+  and restricted deletion protects a maintainer's existing applications.
 
-Resource validation, parameterized CRUD queries, resource constraints, and body
-limits will be added with the resource endpoints. These safeguards alone do not
-make the service production-ready.
+Resource validation, parameterized CRUD queries, and body limits will be added
+with the resource endpoints. These safeguards alone do not make the service
+production-ready.
 
 Authentication, authorization, TLS termination, rate limiting, monitoring,
 automated backups, and high availability are outside the initial scope unless
@@ -90,8 +94,8 @@ time and requirements justify them.
 
 ## Key design decisions
 
-Go, standard HTTP routing, and SQLite connection setup are implemented.
-Resource-specific choices remain the target for subsequent tasks.
+Go, standard HTTP routing, SQLite connection setup, and the resource schema are
+implemented. Resource endpoints remain the target for subsequent tasks.
 
 | Decision | Choice and rationale |
 | --- | --- |
@@ -122,16 +126,36 @@ Current connection settings are one open/idle connection, `foreign_keys=ON`,
 `synchronous=FULL`, and a 1,000 ms busy timeout. These settings are reapplied when
 the pool opens a replacement connection. New databases use SQLite's default
 rollback journal. Readiness has a two-second deadline; database startup has a
-five-second deadline. Resource transaction behavior is not implemented yet.
+five-second deadline, including schema initialization. Resource CRUD transaction
+behavior is not implemented yet.
+
+### Database schema
+
+There are two resource tables: `maintainers` and `applications`, with one row per
+resource. The initial schema is in
+[`internal/storage/schema.sql`](internal/storage/schema.sql), embedded into the
+executable so it does not depend on a SQL file at runtime.
+
+Both tables use SQLite STRICT typing, positive integer primary keys, and
+non-null fields. Optional application strings default to `""`.
+`applications.maintainer_id` references `maintainers.id` with `ON DELETE RESTRICT`
+and has an index for relationship lookups.
+
+Startup applies `CREATE TABLE/INDEX IF NOT EXISTS` within a transaction. Reopening
+a database preserves existing records. This initializes a fresh schema; it does
+not migrate or fully validate an arbitrary existing schema. Future structural
+changes will require explicit migrations. Email syntax, nonblank strings, and
+field-length limits will be validated by the resource endpoints.
 
 ## Testing and GitHub Actions
 
 Current tests cover:
 
 - Readiness responses, routing errors, method handling, and cancellation.
-- SQLite settings on initial and replacement connections, foreign-key
-  enforcement using test-only tables, file-path escaping, and persistence after
-  reopening a database.
+- SQLite settings on initial and replacement connections, file-path escaping,
+  and resource persistence after reopening a database.
+- Both resource tables, optional-field defaults, required fields, foreign keys,
+  restricted deletion, and rollback on schema initialization failure.
 - Startup failures and HTTP shutdown waiting for an active request.
 
 Remaining test work includes:
@@ -154,8 +178,8 @@ the server itself does not.
 - **Actual time spent:** To be recorded as work proceeds, distinguishing design,
   implementation, testing, and documentation.
 - **Current work:** Requirements discussion, README scaffolding, API contract,
-  and the initial server foundation with tests. CRUD implementation has not
-  started.
+  server foundation, and resource schema with tests. CRUD implementation has
+  not started.
 
 ## Additional notes
 

@@ -49,10 +49,10 @@ func TestOpenPersistsDataAndEscapesFilename(t *testing.T) {
 	}
 	defer db.Close()
 
-	if _, err := db.ExecContext(t.Context(), "CREATE TABLE records (value TEXT NOT NULL)"); err != nil {
+	if _, err := db.ExecContext(t.Context(), "INSERT INTO maintainers (name, email) VALUES (?, ?)", "Alex", "alex@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(t.Context(), "INSERT INTO records (value) VALUES (?)", "saved"); err != nil {
+	if _, err := db.ExecContext(t.Context(), "INSERT INTO applications (title, version, maintainer_id) VALUES (?, ?, ?)", "Explorer", "1.0.0", 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -68,33 +68,15 @@ func TestOpenPersistsDataAndEscapesFilename(t *testing.T) {
 	}
 	defer reopened.Close()
 
-	var value string
-	if err := reopened.QueryRowContext(t.Context(), "SELECT value FROM records").Scan(&value); err != nil {
+	var title, name string
+	if err := reopened.QueryRowContext(t.Context(), `
+		SELECT applications.title, maintainers.name
+		FROM applications JOIN maintainers ON applications.maintainer_id = maintainers.id
+	`).Scan(&title, &name); err != nil {
 		t.Fatal(err)
 	}
-	if value != "saved" {
-		t.Fatalf("value = %q, want saved", value)
-	}
-}
-
-func TestOpenEnforcesForeignKeys(t *testing.T) {
-	t.Parallel()
-	db, err := Open(t.Context(), filepath.Join(t.TempDir(), "metadata.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	for _, query := range []string{
-		"CREATE TABLE parents (id INTEGER PRIMARY KEY)",
-		"CREATE TABLE children (parent_id INTEGER NOT NULL REFERENCES parents(id))",
-	} {
-		if _, err := db.ExecContext(t.Context(), query); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := db.ExecContext(t.Context(), "INSERT INTO children (parent_id) VALUES (?)", 99); err == nil {
-		t.Fatal("inserting a nonexistent parent must fail")
+	if title != "Explorer" || name != "Alex" {
+		t.Fatalf("reopened records = (%q, %q), want (Explorer, Alex)", title, name)
 	}
 }
 
