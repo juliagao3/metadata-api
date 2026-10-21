@@ -21,6 +21,8 @@ type stubDatabase struct {
 	remove            func(context.Context, int64) error
 	list              func(context.Context) ([]storage.Maintainer, error)
 	createApplication func(context.Context, storage.Application) (storage.Application, error)
+	getApplication    func(context.Context, int64) (storage.Application, error)
+	listApplications  func(context.Context) ([]storage.Application, error)
 }
 
 func (s stubDatabase) PingContext(ctx context.Context) error {
@@ -49,6 +51,14 @@ func (s stubDatabase) ListMaintainers(ctx context.Context) ([]storage.Maintainer
 
 func (s stubDatabase) CreateApplication(ctx context.Context, input storage.Application) (storage.Application, error) {
 	return s.createApplication(ctx, input)
+}
+
+func (s stubDatabase) GetApplication(ctx context.Context, id int64) (storage.Application, error) {
+	return s.getApplication(ctx, id)
+}
+
+func (s stubDatabase) ListApplications(ctx context.Context) ([]storage.Application, error) {
+	return s.listApplications(ctx)
 }
 
 func TestRouter(t *testing.T) {

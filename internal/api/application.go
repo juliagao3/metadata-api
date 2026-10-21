@@ -40,6 +40,28 @@ func createApplication(w http.ResponseWriter, r *http.Request, db database) {
 	writeJSON(w, r, http.StatusCreated, application)
 }
 
+func getApplication(w http.ResponseWriter, r *http.Request, db database) {
+	id, ok := resourceID(w, r)
+	if !ok {
+		return
+	}
+	application, err := db.GetApplication(r.Context(), id)
+	if err != nil {
+		writeStorageError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, application)
+}
+
+func listApplications(w http.ResponseWriter, r *http.Request, db database) {
+	applications, err := db.ListApplications(r.Context())
+	if err != nil {
+		writeStorageError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, applications)
+}
+
 func validateApplication(input storage.Application) map[string]string {
 	fields := make(map[string]string)
 	for _, field := range []struct {

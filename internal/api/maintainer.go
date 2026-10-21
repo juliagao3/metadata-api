@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -115,16 +114,4 @@ func validateMaintainer(input maintainerInput) map[string]string {
 		}
 	}
 	return fields
-}
-
-func resourceID(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	text := r.PathValue("id")
-	id, err := strconv.ParseInt(text, 10, 64)
-	if err != nil || id <= 0 || strings.IndexFunc(text, func(c rune) bool {
-		return c < '0' || c > '9'
-	}) != -1 {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "ID must be a positive signed 64-bit integer written using decimal digits.")
-		return 0, false
-	}
-	return id, true
 }

@@ -3,7 +3,7 @@
 A RESTful HTTP API for managing Applications and the Maintainers who created them.
 
 **Status:** Server foundation, resource schema, full Maintainer CRUD, and
-Application creation are implemented. Application read/list/update/delete,
+Application creation/read/list are implemented. Application update/delete,
 the E2E suite, and GitHub Actions are not implemented yet.
 
 ## Quick start
@@ -77,6 +77,18 @@ returns `422` with a field error; no application is inserted. Duplicate metadata
 is allowed. Title and version are required nonblank metadata strings; no URL,
 semantic-version, or license-format restrictions are imposed.
 
+Retrieve an application by its returned ID, or list all applications:
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:8080/api/v1/applications/1
+Invoke-RestMethod -Uri http://127.0.0.1:8080/api/v1/applications
+```
+
+Both return `200 OK`. A missing application returns `404`. Lists contain all
+applications in ascending ID order, return `[]` when empty, and are not paginated.
+Responses include all metadata fields and the creator's `maintainer_id`, not an
+embedded maintainer object. These GET routes also support HEAD without a body.
+
 Delete a maintainer that has no applications (the example above would block
 deletion of maintainer `1`):
 
@@ -126,11 +138,12 @@ semantics, and error codes. The API uses JSON and the `/api/v1` prefix.
 The specification can be viewed in any OpenAPI 3.0-compatible viewer.
 `GET /readyz`, `POST /api/v1/maintainers`, `GET /api/v1/maintainers`,
 `GET /api/v1/maintainers/{id}`, `PUT /api/v1/maintainers/{id}`,
-`DELETE /api/v1/maintainers/{id}`, and `POST /api/v1/applications` are implemented.
+`DELETE /api/v1/maintainers/{id}`, `POST /api/v1/applications`,
+`GET /api/v1/applications`, and `GET /api/v1/applications/{id}` are implemented.
 GET routes also support HEAD.
 Unsupported methods on these paths return `405` with an `Allow` header.
-Application item paths still return `404`; application read/list/update/delete
-are not implemented.
+Application update/delete are not implemented; these methods currently return
+`405` on application item paths.
 
 ## Production features
 
@@ -170,8 +183,8 @@ time and requirements justify them.
 ## Key design decisions
 
 Go, standard HTTP routing, SQLite connection setup, the resource schema, full
-Maintainer CRUD, and Application creation are implemented. Remaining Application
-endpoints are subsequent tasks.
+Maintainer CRUD, and Application creation/read/list are implemented. Remaining
+Application endpoints are subsequent tasks.
 
 | Decision | Choice and rationale |
 | --- | --- |
@@ -255,6 +268,9 @@ Current tests cover:
   limits, strict JSON types, generated IDs, optional defaults, preserved values,
   duplicate metadata, missing creators, persistence, cancellation, lock
   contention, and creator deletion protection.
+- Application retrieval/listing, all metadata fields and creator IDs, ascending
+  ID order, empty arrays, missing records, strict path IDs, HEAD responses,
+  request contexts, and read-failure handling.
 
 Remaining test work includes:
 
@@ -277,7 +293,7 @@ the server itself does not.
   implementation, testing, and documentation.
 - **Current work:** Requirements discussion, README scaffolding, API contract,
   server foundation, resource schema, full Maintainer CRUD, and Application
-  creation with tests. Application read/list/update/delete remain unimplemented.
+  creation/read/list with tests. Application update/delete remain unimplemented.
 
 ## Additional notes
 

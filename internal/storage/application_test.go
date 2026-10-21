@@ -4,8 +4,107 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+func TestGetApplication(t *testing.T) {
+	t.Parallel()
+	store := NewStore(openSchemaTestDB(t))
+	owner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := []Application{
+		{Title: " App ", Version: "latest", Company: "Example", Website: "https://example.com",
+			Source: "local", License: "custom", Description: "Description\nSecond line", MaintainerID: owner.ID},
+		{Title: "Minimal", Version: "1", MaintainerID: owner.ID},
+	}
+	var lastID int64
+	for _, input := range inputs {
+		want, err := store.CreateApplication(t.Context(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := store.GetApplication(t.Context(), want.ID)
+		if err != nil || got != want {
+			t.Fatalf("application = %+v, error = %v, want %+v", got, err, want)
+		}
+		lastID = want.ID
+	}
+	got, err := store.GetApplication(t.Context(), lastID+1)
+	if !errors.Is(err, ErrNotFound) || got != (Application{}) {
+		t.Fatalf("application = %+v, error = %v, want not found", got, err)
+	}
+	savedOwner, err := store.GetMaintainer(t.Context(), owner.ID)
+	if err != nil || savedOwner != owner {
+		t.Fatalf("reads changed the maintainer: %+v, error = %v", savedOwner, err)
+	}
+}
+
+func TestListApplications(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	store := NewStore(db)
+	empty, err := store.ListApplications(t.Context())
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Fatalf("empty collection = %v, error = %v, want non-nil empty slice", empty, err)
+	}
+	firstOwner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondOwner, err := store.CreateMaintainer(t.Context(), "Sam", "sam@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Application{
+		{ID: 3, Title: "First", Version: "1", MaintainerID: secondOwner.ID},
+		{ID: 20, Title: "Second", Version: "latest", Company: "Example", Website: "https://example.com",
+			Source: "local", License: "custom", Description: "Description", MaintainerID: firstOwner.ID},
+	}
+	for _, input := range []Application{want[1], want[0]} {
+		if _, err := db.ExecContext(t.Context(), `
+			INSERT INTO applications (id, title, version, company, website, source, license, description, maintainer_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, input.ID, input.Title, input.Version, input.Company, input.Website,
+			input.Source, input.License, input.Description, input.MaintainerID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.ListApplications(t.Context())
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("applications = %+v, error = %v, want %+v in ascending ID order", got, err, want)
+	}
+}
+
+func TestApplicationReadsHonorCancellation(t *testing.T) {
+	t.Parallel()
+	store := NewStore(openSchemaTestDB(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got, err := store.GetApplication(ctx, 1); !errors.Is(err, context.Canceled) || got != (Application{}) {
+		t.Errorf("get result = %+v, error = %v, want cancellation", got, err)
+	}
+	if got, err := store.ListApplications(ctx); !errors.Is(err, context.Canceled) || got != nil {
+		t.Errorf("list result = %+v, error = %v, want cancellation", got, err)
+	}
+}
+
+func TestApplicationReadsReportClosedDatabase(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	store := NewStore(db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.GetApplication(t.Context(), 1); err == nil || errors.Is(err, ErrNotFound) || got != (Application{}) {
+		t.Errorf("get result = %+v, error = %v, want unexpected storage failure", got, err)
+	}
+	if got, err := store.ListApplications(t.Context()); err == nil || got != nil {
+		t.Errorf("list result = %+v, error = %v, want failure rather than empty success", got, err)
+	}
+}
 
 func TestCreateApplicationPersistsAfterReopen(t *testing.T) {
 	t.Parallel()

@@ -7,11 +7,196 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/juliagao3/metadata-api/internal/storage"
 )
+
+func TestGetApplication(t *testing.T) {
+	t.Parallel()
+	record := storage.Application{
+		Title: " App ", Version: "latest", Company: "Example", Website: "https://example.com",
+		Source: "local source", License: "custom", Description: "Description\nSecond line", MaintainerID: 3,
+	}
+	for _, tt := range []struct {
+		name       string
+		path       string
+		method     string
+		storageErr error
+		wantID     int64
+		wantStatus int
+		wantCode   string
+		wantGet    bool
+	}{
+		{name: "found", path: "/api/v1/applications/7", wantID: 7, wantStatus: 200, wantGet: true},
+		{name: "leading zeros", path: "/api/v1/applications/0007", wantID: 7, wantStatus: 200, wantGet: true},
+		{name: "largest ID", path: "/api/v1/applications/9223372036854775807", wantID: 9223372036854775807, wantStatus: 200, wantGet: true},
+		{name: "missing", path: "/api/v1/applications/7", wantID: 7, storageErr: fmt.Errorf("get: %w", storage.ErrNotFound), wantStatus: 404, wantCode: "not_found", wantGet: true},
+		{name: "busy", path: "/api/v1/applications/7", wantID: 7, storageErr: fmt.Errorf("get: %w", storage.ErrUnavailable), wantStatus: 503, wantCode: "database_unavailable", wantGet: true},
+		{name: "failure", path: "/api/v1/applications/7", wantID: 7, storageErr: errors.New("private database details"), wantStatus: 500, wantCode: "internal_error", wantGet: true},
+		{name: "head", method: "HEAD", path: "/api/v1/applications/7", wantID: 7, wantStatus: 200, wantGet: true},
+		{name: "head missing", method: "HEAD", path: "/api/v1/applications/7", wantID: 7, storageErr: storage.ErrNotFound, wantStatus: 404, wantGet: true},
+		{name: "zero", path: "/api/v1/applications/0", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "negative", path: "/api/v1/applications/-7", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "plus sign", path: "/api/v1/applications/+7", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "nonnumeric", path: "/api/v1/applications/seven", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "overflow", path: "/api/v1/applications/9223372036854775808", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "query", path: "/api/v1/applications/7?extra=true", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "missing segment", path: "/api/v1/applications/", wantStatus: 404, wantCode: "not_found"},
+		{name: "extra segment", path: "/api/v1/applications/7/extra", wantStatus: 404, wantCode: "not_found"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			type contextKey struct{}
+			ctx := context.WithValue(t.Context(), contextKey{}, "request")
+			getCalled := false
+			db := stubDatabase{getApplication: func(ctx context.Context, id int64) (storage.Application, error) {
+				getCalled = true
+				if id != tt.wantID || ctx.Value(contextKey{}) != "request" {
+					t.Errorf("unexpected ID or missing request context: %d", id)
+				}
+				result := record
+				result.ID = id
+				return result, tt.storageErr
+			}}
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			response := httptest.NewRecorder()
+			NewRouter(db).ServeHTTP(response, httptest.NewRequest(method, tt.path, nil).WithContext(ctx))
+			if response.Code != tt.wantStatus || getCalled != tt.wantGet {
+				t.Fatalf("status = %d, want %d; get called = %t: %s", response.Code, tt.wantStatus, getCalled, response.Body.String())
+			}
+			if response.Header().Get("Content-Type") != "application/json" {
+				t.Error("response must use application/json")
+			}
+			if method == http.MethodHead {
+				if response.Body.Len() != 0 {
+					t.Error("HEAD must not return a body")
+				}
+				return
+			}
+			if tt.wantCode != "" {
+				var body errorResponse
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Error.Code != tt.wantCode || body.Error.Message == "" ||
+					strings.Contains(response.Body.String(), "private database details") {
+					t.Errorf("unexpected error: %+v", body)
+				}
+				return
+			}
+			var got storage.Application
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			want := record
+			want.ID = tt.wantID
+			if got != want {
+				t.Errorf("application = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestListApplications(t *testing.T) {
+	t.Parallel()
+	records := []storage.Application{
+		{ID: 3, Title: "First", Version: "1", MaintainerID: 7},
+		{ID: 20, Title: "Second", Version: "latest", Company: "Example", Website: "https://example.com",
+			Source: "local", License: "custom", Description: "Description", MaintainerID: 8},
+	}
+	for _, tt := range []struct {
+		name       string
+		method     string
+		path       string
+		records    []storage.Application
+		storageErr error
+		wantStatus int
+		wantCode   string
+		wantList   bool
+	}{
+		{name: "empty", records: []storage.Application{}, wantStatus: 200, wantList: true},
+		{name: "records", records: records, wantStatus: 200, wantList: true},
+		{name: "head", method: "HEAD", records: records, wantStatus: 200, wantList: true},
+		{name: "head busy", method: "HEAD", storageErr: storage.ErrUnavailable, wantStatus: 503, wantList: true},
+		{name: "busy", storageErr: fmt.Errorf("list: %w", storage.ErrUnavailable), wantStatus: 503, wantCode: "database_unavailable", wantList: true},
+		{name: "failure", storageErr: errors.New("private database details"), wantStatus: 500, wantCode: "internal_error", wantList: true},
+		{name: "query", path: "/api/v1/applications?extra=true", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "empty query", path: "/api/v1/applications?", wantStatus: 400, wantCode: "invalid_request"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			type contextKey struct{}
+			ctx := context.WithValue(t.Context(), contextKey{}, "request")
+			listCalled := false
+			db := stubDatabase{listApplications: func(ctx context.Context) ([]storage.Application, error) {
+				listCalled = true
+				if ctx.Value(contextKey{}) != "request" {
+					t.Error("storage must receive the request context")
+				}
+				return tt.records, tt.storageErr
+			}}
+			method, path := tt.method, tt.path
+			if method == "" {
+				method = http.MethodGet
+			}
+			if path == "" {
+				path = "/api/v1/applications"
+			}
+			response := httptest.NewRecorder()
+			NewRouter(db).ServeHTTP(response, httptest.NewRequest(method, path, nil).WithContext(ctx))
+			if response.Code != tt.wantStatus || listCalled != tt.wantList {
+				t.Fatalf("status = %d, want %d; list called = %t: %s", response.Code, tt.wantStatus, listCalled, response.Body.String())
+			}
+			if response.Header().Get("Content-Type") != "application/json" {
+				t.Error("response must use application/json")
+			}
+			if method == http.MethodHead {
+				if response.Body.Len() != 0 {
+					t.Error("HEAD must not return a body")
+				}
+				return
+			}
+			if tt.wantCode != "" {
+				var body errorResponse
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Error.Code != tt.wantCode || body.Error.Message == "" ||
+					strings.Contains(response.Body.String(), "private database details") {
+					t.Errorf("unexpected error: %+v", body)
+				}
+				return
+			}
+			var got []storage.Application
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.records) {
+				t.Errorf("applications = %+v, want %+v", got, tt.records)
+			}
+			if len(tt.records) == 0 && strings.TrimSpace(response.Body.String()) != "[]" {
+				t.Error("empty collection must be [], not null")
+			}
+		})
+	}
+}
+
+func TestApplicationItemRouteMethods(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
+		t.Run(method, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			NewRouter(stubDatabase{}).ServeHTTP(response, httptest.NewRequest(method, "/api/v1/applications/1", nil))
+			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD" {
+				t.Fatalf("status = %d, Allow = %q", response.Code, response.Header().Get("Allow"))
+			}
+		})
+	}
+}
 
 func TestCreateApplication(t *testing.T) {
 	t.Parallel()
@@ -192,17 +377,14 @@ func TestApplicationFieldLengths(t *testing.T) {
 	}
 }
 
-func TestApplicationRouteMethods(t *testing.T) {
+func TestApplicationCollectionRouteMethods(t *testing.T) {
 	t.Parallel()
-	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
+	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
 		t.Run(method, func(t *testing.T) {
 			response := httptest.NewRecorder()
 			NewRouter(stubDatabase{}).ServeHTTP(response, httptest.NewRequest(method, "/api/v1/applications", nil))
-			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "POST" {
+			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD, POST" {
 				t.Fatalf("status = %d, Allow = %q", response.Code, response.Header().Get("Allow"))
-			}
-			if method == http.MethodHead && response.Body.Len() != 0 {
-				t.Error("HEAD error must not include a body")
 			}
 		})
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/juliagao3/metadata-api/internal/storage"
@@ -17,6 +19,8 @@ type database interface {
 	DeleteMaintainer(context.Context, int64) error
 	ListMaintainers(context.Context) ([]storage.Maintainer, error)
 	CreateApplication(context.Context, storage.Application) (storage.Application, error)
+	GetApplication(context.Context, int64) (storage.Application, error)
+	ListApplications(context.Context) ([]storage.Application, error)
 }
 
 func NewRouter(db database) http.Handler {
@@ -64,12 +68,23 @@ func NewRouter(db database) http.Handler {
 		}
 	})
 	mux.HandleFunc("/api/v1/applications", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", "POST")
+		switch r.Method {
+		case http.MethodPost:
+			createApplication(w, r, db)
+		case http.MethodGet, http.MethodHead:
+			listApplications(w, r, db)
+		default:
+			w.Header().Set("Allow", "GET, HEAD, POST")
+			writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method is not supported for this path.")
+		}
+	})
+	mux.HandleFunc("/api/v1/applications/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
 			writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method is not supported for this path.")
 			return
 		}
-		createApplication(w, r, db)
+		getApplication(w, r, db)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "Requested resource does not exist.")
@@ -82,4 +97,16 @@ func NewRouter(db database) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func resourceID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	text := r.PathValue("id")
+	id, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || id <= 0 || strings.IndexFunc(text, func(c rune) bool {
+		return c < '0' || c > '9'
+	}) != -1 {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "ID must be a positive signed 64-bit integer written using decimal digits.")
+		return 0, false
+	}
+	return id, true
 }
