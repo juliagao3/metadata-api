@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"modernc.org/sqlite"
@@ -235,5 +236,60 @@ func TestSchemaInitializationHonorsCancellation(t *testing.T) {
 	cancel()
 	if err := initializeSchema(ctx, db); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context cancellation", err)
+	}
+}
+
+func TestSchemaInitializationReportsCommitFailure(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	reader, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if _, err := reader.ExecContext(t.Context(), "CREATE TABLE existing (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := reader.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var count int
+	if err := tx.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM existing").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+
+	// A shared read lock allows schema writes but blocks their rollback-journal commit.
+	db, err := Open(t.Context(), path)
+	if db != nil {
+		db.Close()
+		t.Fatal("failed schema commit must not return an open database")
+	}
+	var sqliteErr *sqlite.Error
+	if err == nil || !strings.Contains(err.Error(), "commit schema initialization") ||
+		!errors.As(err, &sqliteErr) || sqliteErr.Code()&0xff != sqlite3.SQLITE_BUSY {
+		t.Fatalf("error = %v, want a schema commit failure caused by SQLite busy", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.QueryRowContext(t.Context(), `
+			SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('maintainers', 'applications')
+		`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("failed commit left %d partially initialized resource tables", count)
+	}
+	reopened, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("startup did not recover after releasing the reader: %v", err)
+	}
+	defer reopened.Close()
+	if err := reopened.QueryRowContext(t.Context(), `
+			SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('maintainers', 'applications')
+		`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("recovered resource tables = %d, error = %v, want 2", count, err)
 	}
 }

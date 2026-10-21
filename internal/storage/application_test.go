@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -392,6 +393,56 @@ func TestListApplications(t *testing.T) {
 	got, err := store.ListApplications(t.Context())
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("applications = %+v, error = %v, want %+v in ascending ID order", got, err, want)
+	}
+}
+
+func TestListApplicationsReportsRowFailures(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name       string
+		projection string
+		wantError  string
+	}{
+		{"scan", "CASE WHEN id = 2 THEN 'invalid' ELSE id END AS id, title", "read application:"},
+		{"iteration", "id, CASE WHEN id = 2 THEN abs(-9223372036854775808) ELSE title END AS title", "list applications:"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openSchemaTestDB(t)
+			store := NewStore(db)
+			owner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, title := range []string{"First", "Second"} {
+				if _, err := store.CreateApplication(t.Context(), Application{
+					Title: title, Version: "1", MaintainerID: owner.ID,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.ExecContext(t.Context(), `
+				ALTER TABLE applications RENAME TO original_applications;
+				CREATE VIEW applications AS SELECT `+tt.projection+`,
+					version, company, website, source, license, description, maintainer_id
+				FROM original_applications;
+			`); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.ListApplications(t.Context())
+			if err == nil || !strings.HasPrefix(err.Error(), tt.wantError) || got != nil {
+				t.Fatalf("list result = %+v, error = %v, want %q and no partial collection", got, err, tt.wantError)
+			}
+			if _, err := db.ExecContext(t.Context(), `
+				DROP VIEW applications;
+				ALTER TABLE original_applications RENAME TO applications;
+			`); err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := store.ListApplications(t.Context())
+			if err != nil || len(recovered) != 2 || recovered[0].Title != "First" || recovered[1].Title != "Second" {
+				t.Fatalf("records or connection did not recover: %+v, error = %v", recovered, err)
+			}
+		})
 	}
 }
 

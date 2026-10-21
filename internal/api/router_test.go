@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +14,39 @@ import (
 
 	"github.com/juliagao3/metadata-api/internal/storage"
 )
+
+type failingResponseWriter struct {
+	*httptest.ResponseRecorder
+	writes int
+}
+
+func (w *failingResponseWriter) Write([]byte) (int, error) {
+	w.writes++
+	return 0, errors.New("client disconnected")
+}
+
+func TestWriteJSONLogsResponseFailure(t *testing.T) {
+	// Redirecting the process-wide logger requires a non-parallel test.
+	var output bytes.Buffer
+	original := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(original) })
+
+	response := &failingResponseWriter{ResponseRecorder: httptest.NewRecorder()}
+	writeJSON(response, httptest.NewRequest("GET", "/readyz", nil), http.StatusOK,
+		map[string]string{"status": "ready"})
+
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("response headers changed after a write failure: %+v", response)
+	}
+	if response.writes != 1 || response.Body.Len() != 0 {
+		t.Errorf("writes = %d, body = %q, want one failed write without a fallback body",
+			response.writes, response.Body.String())
+	}
+	if !strings.Contains(output.String(), "write JSON response: client disconnected") {
+		t.Fatalf("write failure was not logged: %q", output.String())
+	}
+}
 
 type stubDatabase struct {
 	ping              func(context.Context) error

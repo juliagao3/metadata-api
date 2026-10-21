@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +63,49 @@ func TestListMaintainers(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("maintainers = %+v, want %+v in ascending ID order", got, want)
+	}
+}
+
+func TestListMaintainersReportsRowFailures(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name       string
+		projection string
+		wantError  string
+	}{
+		{"scan", "CASE WHEN id = 2 THEN 'invalid' ELSE id END AS id, name, email", "read maintainer:"},
+		{"iteration", "id, CASE WHEN id = 2 THEN abs(-9223372036854775808) ELSE name END AS name, email", "list maintainers:"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openSchemaTestDB(t)
+			store := NewStore(db)
+			for _, name := range []string{"First", "Second"} {
+				if _, err := store.CreateMaintainer(t.Context(), name, "alex@example.com"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The view injects a bad second row using real SQLite, without a mock driver.
+			if _, err := db.ExecContext(t.Context(), `
+				ALTER TABLE maintainers RENAME TO original_maintainers;
+				CREATE VIEW maintainers AS SELECT `+tt.projection+` FROM original_maintainers;
+			`); err != nil {
+				t.Fatal(err)
+			}
+			got, err := store.ListMaintainers(t.Context())
+			if err == nil || !strings.HasPrefix(err.Error(), tt.wantError) || got != nil {
+				t.Fatalf("list result = %+v, error = %v, want %q and no partial collection", got, err, tt.wantError)
+			}
+			if _, err := db.ExecContext(t.Context(), `
+				DROP VIEW maintainers;
+				ALTER TABLE original_maintainers RENAME TO maintainers;
+			`); err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := store.ListMaintainers(t.Context())
+			if err != nil || len(recovered) != 2 || recovered[0].Name != "First" || recovered[1].Name != "Second" {
+				t.Fatalf("records or connection did not recover: %+v, error = %v", recovered, err)
+			}
+		})
 	}
 }
 
