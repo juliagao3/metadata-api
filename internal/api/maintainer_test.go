@@ -165,11 +165,11 @@ func TestValidateMaintainer(t *testing.T) {
 
 func TestMaintainerRouteMethods(t *testing.T) {
 	t.Parallel()
-	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodHead} {
+	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
 		t.Run(method, func(t *testing.T) {
 			response := httptest.NewRecorder()
 			NewRouter(stubDatabase{}).ServeHTTP(response, httptest.NewRequest(method, "/api/v1/maintainers", nil))
-			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "POST" {
+			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD, POST" {
 				t.Fatalf("status = %d, Allow = %q", response.Code, response.Header().Get("Allow"))
 			}
 		})

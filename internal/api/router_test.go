@@ -16,6 +16,8 @@ import (
 type stubDatabase struct {
 	ping   func(context.Context) error
 	create func(context.Context, string, string) (storage.Maintainer, error)
+	get    func(context.Context, int64) (storage.Maintainer, error)
+	list   func(context.Context) ([]storage.Maintainer, error)
 }
 
 func (s stubDatabase) PingContext(ctx context.Context) error {
@@ -24,6 +26,14 @@ func (s stubDatabase) PingContext(ctx context.Context) error {
 
 func (s stubDatabase) CreateMaintainer(ctx context.Context, name, email string) (storage.Maintainer, error) {
 	return s.create(ctx, name, email)
+}
+
+func (s stubDatabase) GetMaintainer(ctx context.Context, id int64) (storage.Maintainer, error) {
+	return s.get(ctx, id)
+}
+
+func (s stubDatabase) ListMaintainers(ctx context.Context) ([]storage.Maintainer, error) {
+	return s.list(ctx)
 }
 
 func TestRouter(t *testing.T) {

@@ -2,9 +2,9 @@
 
 A RESTful HTTP API for managing Applications and the Maintainers who created them.
 
-**Status:** Server foundation, resource schema, and Maintainer creation are
-implemented. Other CRUD endpoints, the E2E suite, and GitHub Actions are not
-implemented yet.
+**Status:** Server foundation, resource schema, and Maintainer creation/read/list
+are implemented. Maintainer update/delete, Application CRUD, the E2E suite, and
+GitHub Actions are not implemented yet.
 
 ## Quick start
 
@@ -38,6 +38,16 @@ Invoke-RestMethod -Uri http://127.0.0.1:8080/api/v1/maintainers -Method Post -Co
 The server returns `201 Created`, a `Location` header such as
 `/api/v1/maintainers/1`, and the saved maintainer with its generated ID. Names and
 emails are preserved as supplied, and duplicate names/emails are allowed.
+
+Retrieve the created maintainer using its returned ID, or list all maintainers:
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:8080/api/v1/maintainers/1
+Invoke-RestMethod -Uri http://127.0.0.1:8080/api/v1/maintainers
+```
+
+Both return `200 OK`. A missing maintainer returns `404`. Lists are ordered by
+ascending ID, return `[]` when empty, and are not paginated in this version.
 
 Optional configuration:
 
@@ -74,9 +84,11 @@ schemas, validation, example requests and responses, update and deletion
 semantics, and error codes. The API uses JSON and the `/api/v1` prefix.
 
 The specification can be viewed in any OpenAPI 3.0-compatible viewer.
-`GET /readyz` and `POST /api/v1/maintainers` are implemented. Other methods on the
-maintainer collection currently return `405` with `Allow: POST`. Other resource
-paths currently return `404`; their contracts describe intended behavior.
+`GET /readyz`, `POST /api/v1/maintainers`, `GET /api/v1/maintainers`, and
+`GET /api/v1/maintainers/{id}` are implemented. GET routes also support HEAD.
+Unsupported methods on these paths return `405` with an `Allow` header.
+Application paths currently return `404`; their contracts describe intended
+behavior.
 
 ## Production features
 
@@ -113,8 +125,8 @@ time and requirements justify them.
 ## Key design decisions
 
 Go, standard HTTP routing, SQLite connection setup, the resource schema, and
-Maintainer creation are implemented. Remaining resource endpoints are subsequent
-tasks.
+Maintainer creation/read/list are implemented. Remaining resource endpoints are
+subsequent tasks.
 
 | Decision | Choice and rationale |
 | --- | --- |
@@ -182,6 +194,8 @@ Current tests cover:
   content types, and storage-error mapping.
 - Parameterized Maintainer insertion, duplicate metadata, persistence,
   cancellation, and recovery after database lock contention.
+- Maintainer retrieval/listing, ascending ID order, empty arrays, strict path-ID
+  parsing, missing resources, HEAD responses, and read-failure handling.
 
 Remaining test work includes:
 
@@ -203,7 +217,7 @@ the server itself does not.
 - **Actual time spent:** To be recorded as work proceeds, distinguishing design,
   implementation, testing, and documentation.
 - **Current work:** Requirements discussion, README scaffolding, API contract,
-  server foundation, resource schema, and Maintainer creation with tests.
+  server foundation, resource schema, and Maintainer creation/read/list with tests.
   Remaining CRUD operations have not been implemented.
 
 ## Additional notes

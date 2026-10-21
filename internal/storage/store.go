@@ -10,7 +10,10 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-var ErrUnavailable = errors.New("database unavailable")
+var (
+	ErrNotFound    = errors.New("resource not found")
+	ErrUnavailable = errors.New("database unavailable")
+)
 
 type Store struct {
 	db *sql.DB
@@ -25,6 +28,9 @@ func (s *Store) PingContext(ctx context.Context) error {
 }
 
 func databaseError(err error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %w", ErrNotFound, err)
+	}
 	var sqliteErr *sqlite.Error
 	if errors.As(err, &sqliteErr) {
 		code := sqliteErr.Code() & 0xff

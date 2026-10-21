@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/mail"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -33,16 +34,33 @@ func createMaintainer(w http.ResponseWriter, r *http.Request, db database) {
 
 	maintainer, err := db.CreateMaintainer(r.Context(), input.Name, input.Email)
 	if err != nil {
-		log.Printf("create maintainer failed: %v", err)
-		if errors.Is(err, storage.ErrUnavailable) {
-			writeError(w, r, http.StatusServiceUnavailable, "database_unavailable", "Database is unavailable.")
-		} else {
-			writeError(w, r, http.StatusInternalServerError, "internal_error", "Unable to create maintainer.")
-		}
+		writeStorageError(w, r, err)
 		return
 	}
 	w.Header().Set("Location", fmt.Sprintf("/api/v1/maintainers/%d", maintainer.ID))
 	writeJSON(w, r, http.StatusCreated, maintainer)
+}
+
+func getMaintainer(w http.ResponseWriter, r *http.Request, db database) {
+	id, ok := resourceID(w, r)
+	if !ok {
+		return
+	}
+	maintainer, err := db.GetMaintainer(r.Context(), id)
+	if err != nil {
+		writeStorageError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, maintainer)
+}
+
+func listMaintainers(w http.ResponseWriter, r *http.Request, db database) {
+	maintainers, err := db.ListMaintainers(r.Context())
+	if err != nil {
+		writeStorageError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, maintainers)
 }
 
 func validateMaintainer(input maintainerInput) map[string]string {
@@ -64,4 +82,29 @@ func validateMaintainer(input maintainerInput) map[string]string {
 		}
 	}
 	return fields
+}
+
+func writeStorageError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, r, http.StatusNotFound, "not_found", "Requested resource does not exist.")
+		return
+	}
+	log.Printf("storage operation failed: %v", err)
+	if errors.Is(err, storage.ErrUnavailable) {
+		writeError(w, r, http.StatusServiceUnavailable, "database_unavailable", "Database is unavailable.")
+	} else {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Database operation failed.")
+	}
+}
+
+func resourceID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	text := r.PathValue("id")
+	id, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || id <= 0 || strings.IndexFunc(text, func(c rune) bool {
+		return c < '0' || c > '9'
+	}) != -1 {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "ID must be a positive signed 64-bit integer written using decimal digits.")
+		return 0, false
+	}
+	return id, true
 }
