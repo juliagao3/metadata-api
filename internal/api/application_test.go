@@ -14,6 +14,110 @@ import (
 	"github.com/juliagao3/metadata-api/internal/storage"
 )
 
+func TestUpdateApplication(t *testing.T) {
+	t.Parallel()
+	validBody := `{"title":"Updated App","version":"2.0"}`
+	for _, tt := range []struct {
+		name        string
+		body        string
+		path        string
+		contentType string
+		storageErr  error
+		wantStatus  int
+		wantCode    string
+		wantFields  []string
+		wantUpdate  bool
+	}{
+		{name: "minimal", body: validBody, contentType: "application/json", wantStatus: 200, wantUpdate: true},
+		{name: "full metadata", body: `{"title":" Updated App ","version":" latest ","company":" Example ","website":"not a URL","source":"local","license":"custom","description":"First line\nSecond line"}`, contentType: "application/json; charset=utf-8", wantStatus: 200, wantUpdate: true},
+		{name: "exact byte limit", body: validBody + strings.Repeat(" ", maxRequestBytes-len(validBody)), contentType: "application/json", wantStatus: 200, wantUpdate: true},
+		{name: "missing title", body: `{"version":"2"}`, contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantFields: []string{"title"}},
+		{name: "missing version", body: `{"title":"App"}`, contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantFields: []string{"version"}},
+		{name: "empty object", body: `{}`, contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantFields: []string{"title", "version"}},
+		{name: "blank title", body: `{"title":"\u2003","version":"2"}`, contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantFields: []string{"title"}},
+		{name: "blank version", body: `{"title":"App","version":" "}`, contentType: "application/json", wantStatus: 422, wantCode: "validation_failed", wantFields: []string{"version"}},
+		{name: "changed creator", body: `{"title":"App","version":"2","maintainer_id":4}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "unchanged creator", body: `{"title":"App","version":"2","maintainer_id":3}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "client supplied ID", body: `{"title":"App","version":"2","id":7}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "null optional", body: `{"title":"App","version":"2","company":null}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "wrong type", body: `{"title":"App","version":2}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "unknown field", body: `{"title":"App","version":"2","extra":true}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "wrong casing", body: `{"Title":"App","version":"2"}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "malformed", body: `{"title":`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "multiple objects", body: validBody + `{}`, contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "missing content type", body: validBody, wantStatus: 415, wantCode: "unsupported_media_type"},
+		{name: "wrong content type", body: validBody, contentType: "text/plain", wantStatus: 415, wantCode: "unsupported_media_type"},
+		{name: "oversized", body: validBody + strings.Repeat(" ", maxRequestBytes), contentType: "application/json", wantStatus: 413, wantCode: "request_too_large"},
+		{name: "invalid ID", body: validBody, path: "/api/v1/applications/0", contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "query", body: validBody, path: "/api/v1/applications/7?extra=true", contentType: "application/json", wantStatus: 400, wantCode: "invalid_request"},
+		{name: "missing", body: validBody, contentType: "application/json", storageErr: fmt.Errorf("update: %w", storage.ErrNotFound), wantStatus: 404, wantCode: "not_found", wantUpdate: true},
+		{name: "busy", body: validBody, contentType: "application/json", storageErr: fmt.Errorf("update: %w", storage.ErrUnavailable), wantStatus: 503, wantCode: "database_unavailable", wantUpdate: true},
+		{name: "failure", body: validBody, contentType: "application/json", storageErr: errors.New("private database details"), wantStatus: 500, wantCode: "internal_error", wantUpdate: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			type contextKey struct{}
+			ctx := context.WithValue(t.Context(), contextKey{}, "request")
+			updateCalled := false
+			db := stubDatabase{updateApplication: func(ctx context.Context, id int64, input storage.Application) (storage.Application, error) {
+				updateCalled = true
+				if id != 7 || ctx.Value(contextKey{}) != "request" || input.ID != 0 || input.MaintainerID != 0 {
+					t.Error("storage must receive the path ID, request context, and only editable input")
+				}
+				input.ID = id
+				input.MaintainerID = 3
+				return input, tt.storageErr
+			}}
+			path := tt.path
+			if path == "" {
+				path = "/api/v1/applications/7"
+			}
+			request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(tt.body)).WithContext(ctx)
+			if tt.contentType != "" {
+				request.Header.Set("Content-Type", tt.contentType)
+			}
+			response := httptest.NewRecorder()
+			NewRouter(db).ServeHTTP(response, request)
+			if response.Code != tt.wantStatus || updateCalled != tt.wantUpdate {
+				t.Fatalf("status = %d, want %d; update called = %t: %s", response.Code, tt.wantStatus, updateCalled, response.Body.String())
+			}
+			if response.Header().Get("Content-Type") != "application/json" || response.Header().Get("Location") != "" {
+				t.Error("response must be JSON without a creation Location")
+			}
+			if tt.wantCode != "" {
+				var body errorResponse
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Error.Code != tt.wantCode || body.Error.Message == "" ||
+					strings.Contains(response.Body.String(), "private database details") {
+					t.Errorf("unexpected error: %+v", body)
+				}
+				for _, field := range tt.wantFields {
+					if body.Error.Fields[field] == "" {
+						t.Errorf("missing field error for %s", field)
+					}
+				}
+				if body.Error.Fields["maintainer_id"] != "" {
+					t.Error("PUT must not require the immutable creator")
+				}
+				return
+			}
+			var got, want storage.Application
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(tt.body), &want); err != nil {
+				t.Fatal(err)
+			}
+			want.ID = 7
+			want.MaintainerID = 3
+			if got != want {
+				t.Errorf("updated = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
 func TestGetApplication(t *testing.T) {
 	t.Parallel()
 	record := storage.Application{
@@ -187,11 +291,11 @@ func TestListApplications(t *testing.T) {
 
 func TestApplicationItemRouteMethods(t *testing.T) {
 	t.Parallel()
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
+	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodPatch, http.MethodOptions} {
 		t.Run(method, func(t *testing.T) {
 			response := httptest.NewRecorder()
 			NewRouter(stubDatabase{}).ServeHTTP(response, httptest.NewRequest(method, "/api/v1/applications/1", nil))
-			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD" {
+			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, HEAD, PUT" {
 				t.Fatalf("status = %d, Allow = %q", response.Code, response.Header().Get("Allow"))
 			}
 		})
@@ -353,24 +457,45 @@ func TestApplicationFieldLengths(t *testing.T) {
 						t.Errorf("over-limit field error = %v", fields)
 					}
 				}
-				object := map[string]any{"title": "App", "version": "1", "maintainer_id": 7}
-				object[field.name] = strings.Repeat("\u754c", length)
-				body, err := json.Marshal(object)
-				if err != nil {
-					t.Fatal(err)
-				}
-				createCalled := false
-				db := stubDatabase{createApplication: func(ctx context.Context, input storage.Application) (storage.Application, error) {
-					createCalled = true
-					input.ID = 42
-					return input, nil
-				}}
-				request := httptest.NewRequest(http.MethodPost, "/api/v1/applications", strings.NewReader(string(body)))
-				request.Header.Set("Content-Type", "application/json")
-				response := httptest.NewRecorder()
-				NewRouter(db).ServeHTTP(response, request)
-				if response.Code != wantStatus || createCalled != (length == field.max) {
-					t.Fatalf("status = %d, want %d; create called = %t", response.Code, wantStatus, createCalled)
+				for _, method := range []string{http.MethodPost, http.MethodPut} {
+					t.Run(method, func(t *testing.T) {
+						path := "/api/v1/applications"
+						status := wantStatus
+						object := map[string]any{"title": "App", "version": "1"}
+						if method == http.MethodPost {
+							object["maintainer_id"] = 7
+						} else {
+							path += "/42"
+							if status == http.StatusCreated {
+								status = http.StatusOK
+							}
+						}
+						object[field.name] = strings.Repeat("\u754c", length)
+						body, err := json.Marshal(object)
+						if err != nil {
+							t.Fatal(err)
+						}
+						writeCalled := false
+						db := stubDatabase{
+							createApplication: func(ctx context.Context, input storage.Application) (storage.Application, error) {
+								writeCalled = true
+								input.ID = 42
+								return input, nil
+							},
+							updateApplication: func(ctx context.Context, id int64, input storage.Application) (storage.Application, error) {
+								writeCalled = true
+								input.ID, input.MaintainerID = id, 7
+								return input, nil
+							},
+						}
+						request := httptest.NewRequest(method, path, strings.NewReader(string(body)))
+						request.Header.Set("Content-Type", "application/json")
+						response := httptest.NewRecorder()
+						NewRouter(db).ServeHTTP(response, request)
+						if response.Code != status || writeCalled != (length == field.max) {
+							t.Fatalf("status = %d, want %d; write called = %t", response.Code, status, writeCalled)
+						}
+					})
 				}
 			})
 		}

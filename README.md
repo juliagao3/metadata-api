@@ -3,7 +3,7 @@
 A RESTful HTTP API for managing Applications and the Maintainers who created them.
 
 **Status:** Server foundation, resource schema, full Maintainer CRUD, and
-Application creation/read/list are implemented. Application update/delete,
+Application creation/read/list/update are implemented. Application delete,
 the E2E suite, and GitHub Actions are not implemented yet.
 
 ## Quick start
@@ -89,6 +89,19 @@ applications in ascending ID order, return `[]` when empty, and are not paginate
 Responses include all metadata fields and the creator's `maintainer_id`, not an
 embedded maintainer object. These GET routes also support HEAD without a body.
 
+Replace an application's editable metadata:
+
+```powershell
+$body = @{ title = "Metadata Explorer"; version = "2.0.0" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8080/api/v1/applications/1 -Method Put -ContentType application/json -Body $body
+```
+
+PUT returns `200 OK` with the saved application. Title and version are required
+each time; omitted optional metadata becomes `""`, so this example clears all
+optional fields. The ID and creator stay unchanged. Supplying `id` or
+`maintainer_id` is rejected with `400`, even if unchanged. A missing application
+returns `404`; PUT never creates one. Repeating an identical PUT is allowed.
+
 Delete a maintainer that has no applications (the example above would block
 deletion of maintainer `1`):
 
@@ -139,11 +152,12 @@ The specification can be viewed in any OpenAPI 3.0-compatible viewer.
 `GET /readyz`, `POST /api/v1/maintainers`, `GET /api/v1/maintainers`,
 `GET /api/v1/maintainers/{id}`, `PUT /api/v1/maintainers/{id}`,
 `DELETE /api/v1/maintainers/{id}`, `POST /api/v1/applications`,
-`GET /api/v1/applications`, and `GET /api/v1/applications/{id}` are implemented.
+`GET /api/v1/applications`, `GET /api/v1/applications/{id}`, and
+`PUT /api/v1/applications/{id}` are implemented.
 GET routes also support HEAD.
 Unsupported methods on these paths return `405` with an `Allow` header.
-Application update/delete are not implemented; these methods currently return
-`405` on application item paths.
+Application deletion is not implemented; DELETE currently returns `405` on
+application item paths.
 
 ## Production features
 
@@ -162,12 +176,12 @@ The foundation includes:
   initialized together before HTTP startup, without clearing existing data.
 - **Relational integrity:** Non-null foreign keys prevent orphaned applications,
   and restricted deletion protects a maintainer's existing applications.
-- **Bounded, validated write requests:** Maintainer creation/update and
-  Application creation accept one JSON object up to 64 KiB, reject unknown
+- **Bounded, validated write requests:** Maintainer and Application
+  creation/update accept one JSON object up to 64 KiB, reject unknown
   fields/nulls/incorrect types, and validate required fields and string lengths.
   Maintainer requests also validate email syntax.
 - **Parameterized writes:** Resource values are passed separately from SQL.
-  SQLite assigns IDs on creation and preserves maintainer IDs on update; lock
+  SQLite assigns IDs on creation and preserves resource IDs on update; lock
   contention is reported as `503`, while unexpected storage failures return `500`.
 - **Protected deletion:** SQLite rejects deletion of maintainers who still own
   applications; the API returns `409` without cascading to their applications.
@@ -183,8 +197,8 @@ time and requirements justify them.
 ## Key design decisions
 
 Go, standard HTTP routing, SQLite connection setup, the resource schema, full
-Maintainer CRUD, and Application creation/read/list are implemented. Remaining
-Application endpoints are subsequent tasks.
+Maintainer CRUD, and Application creation/read/list/update are implemented.
+Application deletion is the remaining resource endpoint.
 
 | Decision | Choice and rationale |
 | --- | --- |
@@ -222,6 +236,8 @@ separate existence check or multi-statement transaction is needed.
 Application creation also uses one atomic `INSERT ... RETURNING` statement.
 The foreign key checks the creator as part of that write, without a separate
 existence check that could race with maintainer deletion.
+Application updates use one atomic `UPDATE ... RETURNING` statement, updating
+only editable metadata and leaving the ID and creator unchanged.
 
 ### Database schema
 
@@ -240,8 +256,9 @@ a database preserves existing records. This initializes a fresh schema; it does
 not migrate or fully validate an arbitrary existing schema. Future structural
 changes will require explicit migrations. Maintainer creation/update validate email
 syntax, nonblank names, and field-length limits in the HTTP layer. Application
-creation validates nonblank title/version, metadata lengths, and a positive
-maintainer ID in the HTTP layer; SQLite enforces that the maintainer exists.
+creation/update validate nonblank title/version and metadata lengths. Creation
+also requires a positive maintainer ID; SQLite enforces that the maintainer
+exists. Updates do not accept creator changes.
 
 ## Testing and GitHub Actions
 
@@ -271,6 +288,9 @@ Current tests cover:
 - Application retrieval/listing, all metadata fields and creator IDs, ascending
   ID order, empty arrays, missing records, strict path IDs, HEAD responses,
   request contexts, and read-failure handling.
+- Application replacement, clearing omitted optional metadata, required fields,
+  immutable IDs/creators, repeated identical PUTs, duplicate metadata, no upsert,
+  persistence, cancellation, and lock contention.
 
 Remaining test work includes:
 
@@ -293,7 +313,7 @@ the server itself does not.
   implementation, testing, and documentation.
 - **Current work:** Requirements discussion, README scaffolding, API contract,
   server foundation, resource schema, full Maintainer CRUD, and Application
-  creation/read/list with tests. Application update/delete remain unimplemented.
+  creation/read/list/update with tests. Application deletion remains unimplemented.
 
 ## Additional notes
 

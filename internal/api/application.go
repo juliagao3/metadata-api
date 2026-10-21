@@ -15,22 +15,18 @@ func createApplication(w http.ResponseWriter, r *http.Request, db database) {
 	if !decodeJSON(w, r, &input, "title", "version", "company", "website", "source", "license", "description", "maintainer_id") {
 		return
 	}
-	if fields := validateApplication(input); len(fields) != 0 {
-		writeJSON(w, r, http.StatusUnprocessableEntity, errorResponse{Error: errorDetail{
-			Code:    "validation_failed",
-			Message: "Request validation failed.",
-			Fields:  fields,
-		}})
+	fields := validateApplication(input)
+	if input.MaintainerID <= 0 {
+		fields["maintainer_id"] = "must be a positive signed 64-bit integer"
+	}
+	if len(fields) != 0 {
+		writeValidationError(w, r, fields)
 		return
 	}
 	application, err := db.CreateApplication(r.Context(), input)
 	if err != nil {
 		if errors.Is(err, storage.ErrForeignKey) {
-			writeJSON(w, r, http.StatusUnprocessableEntity, errorResponse{Error: errorDetail{
-				Code:    "validation_failed",
-				Message: "Request validation failed.",
-				Fields:  map[string]string{"maintainer_id": "must reference an existing maintainer"},
-			}})
+			writeValidationError(w, r, map[string]string{"maintainer_id": "must reference an existing maintainer"})
 			return
 		}
 		writeStorageError(w, r, err)
@@ -62,6 +58,27 @@ func listApplications(w http.ResponseWriter, r *http.Request, db database) {
 	writeJSON(w, r, http.StatusOK, applications)
 }
 
+func updateApplication(w http.ResponseWriter, r *http.Request, db database) {
+	id, ok := resourceID(w, r)
+	if !ok {
+		return
+	}
+	var input storage.Application
+	if !decodeJSON(w, r, &input, "title", "version", "company", "website", "source", "license", "description") {
+		return
+	}
+	if fields := validateApplication(input); len(fields) != 0 {
+		writeValidationError(w, r, fields)
+		return
+	}
+	application, err := db.UpdateApplication(r.Context(), id, input)
+	if err != nil {
+		writeStorageError(w, r, err)
+		return
+	}
+	writeJSON(w, r, http.StatusOK, application)
+}
+
 func validateApplication(input storage.Application) map[string]string {
 	fields := make(map[string]string)
 	for _, field := range []struct {
@@ -83,9 +100,6 @@ func validateApplication(input storage.Application) map[string]string {
 		} else if utf8.RuneCountInString(field.value) > field.max {
 			fields[field.name] = fmt.Sprintf("must not exceed %d characters", field.max)
 		}
-	}
-	if input.MaintainerID <= 0 {
-		fields["maintainer_id"] = "must be a positive signed 64-bit integer"
 	}
 	return fields
 }

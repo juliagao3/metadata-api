@@ -45,6 +45,22 @@ func (s *Store) GetApplication(ctx context.Context, id int64) (Application, erro
 	return application, nil
 }
 
+func (s *Store) UpdateApplication(ctx context.Context, id int64, input Application) (Application, error) {
+	var application Application
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE applications
+		SET title = ?, version = ?, company = ?, website = ?, source = ?, license = ?, description = ?
+		WHERE id = ?
+		RETURNING id, title, version, company, website, source, license, description, maintainer_id
+	`, input.Title, input.Version, input.Company, input.Website, input.Source, input.License, input.Description, id).
+		Scan(&application.ID, &application.Title, &application.Version, &application.Company,
+			&application.Website, &application.Source, &application.License, &application.Description, &application.MaintainerID)
+	if err != nil {
+		return Application{}, fmt.Errorf("update application: %w", databaseError(err))
+	}
+	return application, nil
+}
+
 func (s *Store) ListApplications(ctx context.Context) ([]Application, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, title, version, company, website, source, license, description, maintainer_id

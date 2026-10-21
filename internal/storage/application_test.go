@@ -8,6 +8,166 @@ import (
 	"testing"
 )
 
+func TestUpdateApplicationPersistsAfterReopen(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := NewStore(db)
+	owner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherOwner, err := store.CreateMaintainer(t.Context(), "Sam", "sam@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.CreateApplication(t.Context(), Application{Title: "First", Version: "1", MaintainerID: owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateApplication(t.Context(), Application{Title: "Other", Version: "1", MaintainerID: otherOwner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := Application{
+		ID: other.ID, Title: " App O'Brien'); DROP TABLE applications; --", Version: " latest ",
+		Company: " Example ", Website: "not a URL", Source: "local", License: "custom",
+		Description: "First line\nSecond line", MaintainerID: otherOwner.ID,
+	}
+	want := input
+	want.ID, want.MaintainerID = first.ID, owner.ID
+	updated, err := store.UpdateApplication(t.Context(), first.ID, input)
+	if err != nil || updated != want {
+		t.Fatalf("updated = %+v, error = %v, want %+v with unchanged ID and creator", updated, err, want)
+	}
+	repeated, err := store.UpdateApplication(t.Context(), first.ID, input)
+	if err != nil || repeated != want {
+		t.Fatalf("identical PUT must succeed: %+v, error = %v", repeated, err)
+	}
+	saved, err := store.GetApplication(t.Context(), first.ID)
+	if err != nil || saved != want {
+		t.Fatalf("saved = %+v, error = %v, want %+v", saved, err, want)
+	}
+	cleared := Application{ID: first.ID, Title: other.Title, Version: other.Version, MaintainerID: owner.ID}
+	updated, err = store.UpdateApplication(t.Context(), first.ID, Application{Title: other.Title, Version: other.Version})
+	if err != nil || updated != cleared {
+		t.Fatalf("omitted optional fields must clear, and duplicate metadata is allowed: %+v, error = %v", updated, err)
+	}
+	missing, err := store.UpdateApplication(t.Context(), other.ID+1, input)
+	if !errors.Is(err, ErrNotFound) || missing != (Application{}) {
+		t.Fatalf("application = %+v, error = %v, want not found without upsert", missing, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	store = NewStore(reopened)
+	all, err := store.ListApplications(t.Context())
+	if err != nil || !reflect.DeepEqual(all, []Application{cleared, other}) {
+		t.Fatalf("persisted records = %+v, error = %v; unrelated record must remain unchanged", all, err)
+	}
+	for _, creator := range []Maintainer{owner, otherOwner} {
+		got, err := store.GetMaintainer(t.Context(), creator.ID)
+		if err != nil || got != creator {
+			t.Fatalf("creator changed: %+v, error = %v", got, err)
+		}
+	}
+	if err := store.DeleteMaintainer(t.Context(), owner.ID); !errors.Is(err, ErrMaintainerInUse) {
+		t.Fatalf("original creator must remain protected: %v", err)
+	}
+}
+
+func TestUpdateApplicationHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	store := NewStore(openSchemaTestDB(t))
+	owner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := store.CreateApplication(t.Context(), Application{Title: "App", Version: "1", MaintainerID: owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	got, err := store.UpdateApplication(ctx, original.ID, Application{Title: "Changed", Version: "2"})
+	if !errors.Is(err, context.Canceled) || got != (Application{}) {
+		t.Fatalf("application = %+v, error = %v, want cancellation", got, err)
+	}
+	saved, err := store.GetApplication(t.Context(), original.ID)
+	if err != nil || saved != original {
+		t.Fatalf("canceled update changed the application: %+v, error = %v", saved, err)
+	}
+}
+
+func TestUpdateApplicationReportsClosedDatabase(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewStore(db).UpdateApplication(t.Context(), 1, Application{Title: "App", Version: "2"})
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnavailable) || got != (Application{}) {
+		t.Fatalf("application = %+v, error = %v, want unexpected storage failure", got, err)
+	}
+}
+
+func TestUpdateApplicationReportsBusyDatabase(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	writerDB, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writerDB.Close()
+	writer := NewStore(writerDB)
+	owner, err := writer.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := writer.CreateApplication(t.Context(), Application{Title: "App", Version: "1", MaintainerID: owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := writerDB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(t.Context(), "UPDATE applications SET title = ? WHERE id = ?", "Holding lock", original.ID); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(db)
+	input := Application{Title: "Updated", Version: "2"}
+	got, err := store.UpdateApplication(t.Context(), original.ID, input)
+	if !errors.Is(err, ErrUnavailable) || got != (Application{}) {
+		t.Fatalf("application = %+v, error = %v, want unavailable", got, err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.GetApplication(t.Context(), original.ID)
+	if err != nil || saved != original {
+		t.Fatalf("failed update changed the application: %+v, error = %v", saved, err)
+	}
+	if _, err := store.UpdateApplication(t.Context(), original.ID, input); err != nil {
+		t.Fatalf("update must work after releasing the lock: %v", err)
+	}
+}
+
 func TestGetApplication(t *testing.T) {
 	t.Parallel()
 	store := NewStore(openSchemaTestDB(t))

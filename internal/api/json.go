@@ -88,6 +88,14 @@ func writeStorageError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
+func writeValidationError(w http.ResponseWriter, r *http.Request, fields map[string]string) {
+	writeJSON(w, r, http.StatusUnprocessableEntity, errorResponse{Error: errorDetail{
+		Code:    "validation_failed",
+		Message: "Request validation failed.",
+		Fields:  fields,
+	}})
+}
+
 func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
 	writeJSON(w, r, status, errorResponse{Error: errorDetail{Code: code, Message: message}})
 }

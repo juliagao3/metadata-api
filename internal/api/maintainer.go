@@ -85,11 +85,7 @@ func decodeMaintainerInput(w http.ResponseWriter, r *http.Request) (maintainerIn
 		return input, false
 	}
 	if fields := validateMaintainer(input); len(fields) != 0 {
-		writeJSON(w, r, http.StatusUnprocessableEntity, errorResponse{Error: errorDetail{
-			Code:    "validation_failed",
-			Message: "Request validation failed.",
-			Fields:  fields,
-		}})
+		writeValidationError(w, r, fields)
 		return input, false
 	}
 	return input, true
