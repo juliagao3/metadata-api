@@ -1,8 +1,9 @@
 # Metadata API design
 
 This document describes the implemented server, rather than the original
-proposal. The [README](../README.md) covers setup and examples; the
-[OpenAPI specification](openapi.yaml) defines the detailed HTTP contract.
+proposal. The [README](../README.md) covers setup, running, and testing; the
+[OpenAPI specification](openapi.yaml) defines the HTTP contract, including API
+request/response examples and error codes.
 
 ## Scope and technology choices
 
@@ -153,8 +154,10 @@ a forced process restart. This demonstrates process-restart persistence, not
 power-loss recovery or hardware durability. The separate executable is not
 included in the parent test's coverage report.
 
-The [GitHub Actions workflow](../.github/workflows/ci.yml) is prepared for Linux
-formatting, static analysis, build, race-enabled tests, and coverage/log artifacts.
-Its first hosted run is pending. Race detection covers code executed in the test
-processes, not the separate ordinary executable built by the E2E suite.
+The [GitHub Actions workflow](../.github/workflows/ci.yml) runs formatting,
+static analysis, build, and race-enabled tests on Linux, and uploads coverage/log
+artifacts.
+The [hosted E2E/CI run](https://github.com/juliagao3/metadata-api/actions/runs/39620817737)
+passed with 95.7% statement coverage. Race detection covers code executed in the
+test processes, not the separate ordinary executable built by the E2E suite.
 No load-test or high-availability guarantees are claimed.

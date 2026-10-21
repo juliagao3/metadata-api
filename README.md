@@ -2,9 +2,8 @@
 
 A RESTful HTTP API for managing Applications and the Maintainers who created them.
 
-**Status:** Server foundation, resource schema, full CRUD for Maintainers and
-Applications, and the E2E suite are implemented. The CI workflow is prepared;
-its first GitHub-hosted run is pending.
+**Status:** Full CRUD, SQLite persistence, and unit/E2E tests are implemented.
+CI has passed on Linux, including race detection.
 
 ## Quick start
 
@@ -60,6 +59,15 @@ never upserts. Maintainers with applications cannot be deleted.
 
 ## Production features
 
+### Highlight: database-enforced ownership protection
+
+SQLite checks creator existence and blocks deletion of referenced maintainers
+inside atomic writes, avoiding races from separate check-then-write queries.
+E2E tests verify that a blocked deletion preserves both resources and a maintainer
+can be deleted only after their last application is removed.
+
+### Other safeguards
+
 - **Readiness and HTTP timeouts:** Detect unavailable storage and bound stalled
   connections; graceful shutdown lets active requests finish.
 - **Strict inputs:** A 64 KiB body limit, JSON field/type checks, required fields,
@@ -70,19 +78,18 @@ never upserts. Maintainers with applications cannot be deleted.
   returns 503 and protected maintainer deletion returns 409.
 - **Loopback default:** Avoids exposing an unauthenticated service by default.
 
-These safeguards do not make the service production-ready. Authentication,
-authorization, TLS, rate limiting, monitoring, backups, and high availability
-are not implemented.
+Authentication, authorization, TLS, rate limiting, monitoring, backups, and high
+availability are not implemented.
 
 ## Key design decisions
 
 | Decision | Choice and rationale |
 | --- | --- |
-| Language | Go provides static typing, standard HTTP/JSON and testing libraries, and straightforward deployment as a compiled executable. |
-| HTTP | Standard-library routing and JSON; no web framework needed for this scope. |
-| Storage | SQLite with explicit SQL, avoiding a separate database service. |
-| Relationship | One maintainer per application, enforced by a non-null foreign key. |
-| Updates | PUT for editable fields; PATCH and release history are deferred. |
+| Language | Go's static types, built-in tooling, and standard libraries make the service straightforward to test and maintain, with deployment as a single executable. |
+| HTTP | `net/http` handles routing without a framework; JSON-only input/output keeps one contract to validate, document, and test. |
+| Storage | SQLite supplies transactions, persistence, and foreign keys without an external service. Explicit SQL keeps queries understandable and avoids ORM complexity. |
+| Relationship | One maintainer can create many applications. A required foreign key and restricted deletion prevent orphans without unexpectedly cascading deletions. |
+| Updates | PUT gives explicit, repeatable replacement semantics while preserving IDs and creators. PATCH and release history are deferred to keep update behavior small and complete. |
 
 ### Storage guarantees and scaling
 
@@ -121,17 +128,11 @@ The subprocess is not included in the parent test's coverage report.
 Race detection (`go test -race ./...`) requires a supported C toolchain.
 The [CI workflow](.github/workflows/ci.yml) runs formatting, vet, build, and all
 tests with race detection on Linux for main pushes and pull requests, or manually.
-It uploads coverage reports and test logs. Its first hosted run is still pending.
+The [successful E2E/CI run](https://github.com/juliagao3/metadata-api/actions/runs/39620817737)
+reports **95.7% statement coverage**, including **100% API coverage**.
+Coverage reports and test logs are available in its `test-reports` artifact.
 
 ## Cost and time spent
 
-- **Time budget:** Approximately eight hours of focused project work.
-- **Actual time spent:** To be recorded as work proceeds, distinguishing design,
-  implementation, testing, and documentation.
-
-## Additional notes
-
-- This is a take-home assignment; completeness and understandable code take
-  priority over extra features.
-- AI assistance is being used for planning, documentation, implementation, and
-  testing.
+Approximately **7 hours of focused work** across design, implementation, testing,
+CI, and documentation, excluding breaks.
