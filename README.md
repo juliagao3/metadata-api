@@ -140,7 +140,7 @@ go build -o .\bin\metadata-api.exe .\cmd\server
 .\bin\metadata-api.exe
 ```
 
-Run the current unit, storage, and HTTP lifecycle tests and generate coverage:
+Run the unit, storage, HTTP lifecycle, and end-to-end tests and generate coverage:
 
 ```powershell
 go test -coverprofile coverage.out ./...
@@ -148,6 +148,14 @@ go tool cover -html coverage.out -o coverage.html
 ```
 
 Open `coverage.html` in a browser. For static checks, run `go vet ./...`.
+To run only the E2E suite, use `go test -v ./tests/e2e`.
+It builds the server once, starts real processes on ephemeral loopback ports with
+temporary SQLite files, and tests the API through HTTP without mocks.
+It checks CRUD, validation, relationship protection, and persistence after a
+forced process restart. Processes and temporary files are cleaned up automatically;
+server logs are included in test output on failure. Go must be on `PATH` because
+the suite invokes `go build`. These tests build an ordinary server executable;
+the subprocess is not included in the parent test's coverage report.
 The commands above target PowerShell on Windows; on Unix-like systems, use
 `./cmd/server` and omit the `.exe` extension when building.
 
@@ -301,18 +309,21 @@ Current tests cover:
   persistence, cancellation, lock recovery, preserved creators and unrelated
   applications, and allowing maintainer deletion only after their last application
   is removed.
+- Retained E2E tests in `tests/e2e`: compiled-server HTTP CRUD for both resources,
+  generated IDs and Location headers, ordered/empty lists, HEAD, strict request
+  validation, error codes and Allow headers, duplicate metadata, one-to-many
+  ownership, protected deletion, immutable creators, PUT replacement/no-upsert,
+  and persistence of creates, updates, and deletions after a forced restart.
 
 Remaining test work includes:
 
-- End-to-end tests against a compiled, running server over HTTP, including
-  persistence across a server restart.
 - GitHub Actions checks for formatting, static analysis, build, tests, and race
   detection, with coverage reports and failure logs.
 
-The E2E suite and GitHub Actions workflow are not implemented yet. Local coverage
-commands are documented above; results combine the current unit and storage
-integration tests. Race detection requires a supported C toolchain even though
-the server itself does not.
+The GitHub Actions workflow is not implemented yet. Local coverage commands are
+documented above; production-code coverage comes from the unit and storage
+integration tests, not the separate server processes used by E2E tests. Race
+detection requires a supported C toolchain even though the server itself does not.
 
 ## Cost and time spent
 
@@ -321,8 +332,8 @@ the server itself does not.
   implementation, testing, and documentation.
 - **Current work:** Requirements discussion, README scaffolding, API contract,
   server foundation, resource schema, and full Maintainer/Application CRUD with
-  unit and storage integration tests. The retained E2E suite and GitHub Actions
-  remain unimplemented.
+  unit, storage integration, and retained E2E tests. GitHub Actions remains
+  unimplemented.
 
 ## Additional notes
 
