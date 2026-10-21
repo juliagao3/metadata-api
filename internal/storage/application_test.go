@@ -1,0 +1,184 @@
+package storage
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"testing"
+)
+
+func TestCreateApplicationPersistsAfterReopen(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := NewStore(db)
+	owner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := Application{
+		ID: 999, Title: " App O'Brien'); DROP TABLE applications; --", Version: " latest ",
+		Company: " Example ", Website: "not a URL", Source: "local source",
+		License: "custom", Description: "First line\nSecond line", MaintainerID: owner.ID,
+	}
+	first, err := store.CreateApplication(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID <= 0 || first.ID == input.ID {
+		t.Fatalf("ID must be server generated: %+v", first)
+	}
+	input.ID = first.ID
+	if first != input {
+		t.Fatalf("application = %+v, want %+v", first, input)
+	}
+	second, err := store.CreateApplication(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID <= 0 || second.ID == first.ID {
+		t.Fatalf("duplicate metadata must create a distinct application: %+v", second)
+	}
+	minimal, err := store.CreateApplication(t.Context(), Application{Title: "Minimal", Version: "1", MaintainerID: owner.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minimal.ID <= 0 || minimal.Company != "" || minimal.Website != "" || minimal.Source != "" ||
+		minimal.License != "" || minimal.Description != "" {
+		t.Fatalf("optional fields must default to empty strings: %+v", minimal)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	var saved Application
+	if err := reopened.QueryRowContext(t.Context(), `
+		SELECT id, title, version, company, website, source, license, description, maintainer_id
+		FROM applications WHERE id = ?
+	`, first.ID).Scan(&saved.ID, &saved.Title, &saved.Version, &saved.Company, &saved.Website,
+		&saved.Source, &saved.License, &saved.Description, &saved.MaintainerID); err != nil {
+		t.Fatal(err)
+	}
+	if saved != first {
+		t.Fatalf("persisted = %+v, want %+v", saved, first)
+	}
+	var count int
+	if err := reopened.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM applications WHERE maintainer_id = ?", owner.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("application count = %d, want 3", count)
+	}
+	savedOwner, err := NewStore(reopened).GetMaintainer(t.Context(), owner.ID)
+	if err != nil || savedOwner != owner {
+		t.Fatalf("creator changed: %+v, error = %v", savedOwner, err)
+	}
+	if err := NewStore(reopened).DeleteMaintainer(t.Context(), owner.ID); !errors.Is(err, ErrMaintainerInUse) {
+		t.Fatalf("creator must be protected from deletion: %v", err)
+	}
+}
+
+func TestCreateApplicationRejectsMissingMaintainer(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	application, err := NewStore(db).CreateApplication(t.Context(), Application{Title: "App", Version: "1", MaintainerID: 7})
+	if !errors.Is(err, ErrForeignKey) || application != (Application{}) {
+		t.Fatalf("application = %+v, error = %v, want foreign key error", application, err)
+	}
+	var count int
+	if err := db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM applications").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("failed creation must not leave an orphan")
+	}
+}
+
+func TestCreateApplicationHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	store := NewStore(db)
+	owner, err := store.CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	application, err := store.CreateApplication(ctx, Application{Title: "App", Version: "1", MaintainerID: owner.ID})
+	if !errors.Is(err, context.Canceled) || application != (Application{}) {
+		t.Fatalf("application = %+v, error = %v, want cancellation", application, err)
+	}
+	var count int
+	if err := db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM applications").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("canceled creation must not insert a record")
+	}
+}
+
+func TestCreateApplicationReportsClosedDatabase(t *testing.T) {
+	t.Parallel()
+	db := openSchemaTestDB(t)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	application, err := NewStore(db).CreateApplication(t.Context(), Application{Title: "App", Version: "1", MaintainerID: 1})
+	if err == nil || errors.Is(err, ErrForeignKey) || errors.Is(err, ErrUnavailable) || application != (Application{}) {
+		t.Fatalf("application = %+v, error = %v, want unexpected storage failure", application, err)
+	}
+}
+
+func TestCreateApplicationReportsBusyDatabase(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	writerDB, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writerDB.Close()
+	owner, err := NewStore(writerDB).CreateMaintainer(t.Context(), "Alex", "alex@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tx, err := writerDB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(t.Context(), "UPDATE maintainers SET name = ? WHERE id = ?", "Holding lock", owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(db)
+	input := Application{Title: "App", Version: "1", MaintainerID: owner.ID}
+	application, err := store.CreateApplication(t.Context(), input)
+	if !errors.Is(err, ErrUnavailable) || application != (Application{}) {
+		t.Fatalf("application = %+v, error = %v, want unavailable", application, err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM applications").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("blocked creation must not insert a record")
+	}
+	if _, err := store.CreateApplication(t.Context(), input); err != nil {
+		t.Fatalf("creation must work after releasing the lock: %v", err)
+	}
+}

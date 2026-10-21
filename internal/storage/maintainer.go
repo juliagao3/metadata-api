@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type Maintainer struct {
@@ -54,16 +50,11 @@ func (s *Store) DeleteMaintainer(ctx context.Context, id int64) error {
 	var deletedID int64
 	err := s.db.QueryRowContext(ctx, "DELETE FROM maintainers WHERE id = ? RETURNING id", id).Scan(&deletedID)
 	if err != nil {
-		var sqliteErr *sqlite.Error
-		if errors.As(err, &sqliteErr) {
-			// SQLite implements ON DELETE RESTRICT using a foreign-key constraint trigger.
-			if sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY ||
-				(sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_TRIGGER &&
-					strings.Contains(sqliteErr.Error(), "FOREIGN KEY constraint failed")) {
-				return fmt.Errorf("delete maintainer: %w: %w", ErrMaintainerInUse, err)
-			}
+		err = databaseError(err)
+		if errors.Is(err, ErrForeignKey) {
+			return fmt.Errorf("delete maintainer: %w: %w", ErrMaintainerInUse, err)
 		}
-		return fmt.Errorf("delete maintainer: %w", databaseError(err))
+		return fmt.Errorf("delete maintainer: %w", err)
 	}
 	return nil
 }

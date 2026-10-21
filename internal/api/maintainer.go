@@ -1,16 +1,12 @@
 package api
 
 import (
-	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/mail"
 	"strconv"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/juliagao3/metadata-api/internal/storage"
 )
 
 type maintainerInput struct {
@@ -119,23 +115,6 @@ func validateMaintainer(input maintainerInput) map[string]string {
 		}
 	}
 	return fields
-}
-
-func writeStorageError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, storage.ErrMaintainerInUse) {
-		writeError(w, r, http.StatusConflict, "maintainer_in_use", "Delete this maintainer's applications first.")
-		return
-	}
-	if errors.Is(err, storage.ErrNotFound) {
-		writeError(w, r, http.StatusNotFound, "not_found", "Requested resource does not exist.")
-		return
-	}
-	log.Printf("storage operation failed: %v", err)
-	if errors.Is(err, storage.ErrUnavailable) {
-		writeError(w, r, http.StatusServiceUnavailable, "database_unavailable", "Database is unavailable.")
-	} else {
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "Database operation failed.")
-	}
 }
 
 func resourceID(w http.ResponseWriter, r *http.Request) (int64, bool) {

@@ -14,12 +14,13 @@ import (
 )
 
 type stubDatabase struct {
-	ping   func(context.Context) error
-	create func(context.Context, string, string) (storage.Maintainer, error)
-	get    func(context.Context, int64) (storage.Maintainer, error)
-	update func(context.Context, int64, string, string) (storage.Maintainer, error)
-	remove func(context.Context, int64) error
-	list   func(context.Context) ([]storage.Maintainer, error)
+	ping              func(context.Context) error
+	create            func(context.Context, string, string) (storage.Maintainer, error)
+	get               func(context.Context, int64) (storage.Maintainer, error)
+	update            func(context.Context, int64, string, string) (storage.Maintainer, error)
+	remove            func(context.Context, int64) error
+	list              func(context.Context) ([]storage.Maintainer, error)
+	createApplication func(context.Context, storage.Application) (storage.Application, error)
 }
 
 func (s stubDatabase) PingContext(ctx context.Context) error {
@@ -44,6 +45,10 @@ func (s stubDatabase) DeleteMaintainer(ctx context.Context, id int64) error {
 
 func (s stubDatabase) ListMaintainers(ctx context.Context) ([]storage.Maintainer, error) {
 	return s.list(ctx)
+}
+
+func (s stubDatabase) CreateApplication(ctx context.Context, input storage.Application) (storage.Application, error) {
+	return s.createApplication(ctx, input)
 }
 
 func TestRouter(t *testing.T) {

@@ -16,6 +16,7 @@ type database interface {
 	UpdateMaintainer(context.Context, int64, string, string) (storage.Maintainer, error)
 	DeleteMaintainer(context.Context, int64) error
 	ListMaintainers(context.Context) ([]storage.Maintainer, error)
+	CreateApplication(context.Context, storage.Application) (storage.Application, error)
 }
 
 func NewRouter(db database) http.Handler {
@@ -61,6 +62,14 @@ func NewRouter(db database) http.Handler {
 			w.Header().Set("Allow", "GET, HEAD, PUT, DELETE")
 			writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method is not supported for this path.")
 		}
+	})
+	mux.HandleFunc("/api/v1/applications", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method is not supported for this path.")
+			return
+		}
+		createApplication(w, r, db)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "Requested resource does not exist.")

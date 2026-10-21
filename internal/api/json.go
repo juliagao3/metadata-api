@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"slices"
 	"unicode/utf8"
+
+	"github.com/juliagao3/metadata-api/internal/storage"
 )
 
 const maxRequestBytes = 64 * 1024
@@ -67,6 +69,23 @@ func writeDecodeError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	writeError(w, r, http.StatusBadRequest, "invalid_request", "Body must contain exactly one valid JSON object.")
+}
+
+func writeStorageError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, storage.ErrMaintainerInUse) {
+		writeError(w, r, http.StatusConflict, "maintainer_in_use", "Delete this maintainer's applications first.")
+		return
+	}
+	if errors.Is(err, storage.ErrNotFound) {
+		writeError(w, r, http.StatusNotFound, "not_found", "Requested resource does not exist.")
+		return
+	}
+	log.Printf("storage operation failed: %v", err)
+	if errors.Is(err, storage.ErrUnavailable) {
+		writeError(w, r, http.StatusServiceUnavailable, "database_unavailable", "Database is unavailable.")
+	} else {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Database operation failed.")
+	}
 }
 
 func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
